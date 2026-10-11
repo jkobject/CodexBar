@@ -31,7 +31,8 @@ struct UsageLedgerMergeTests {
         #expect(remote.records.count == 2)
         let result = try UsageLedgerMerger.merge(
             reports: [.init(host: "fixture-mac", ledger: local), .init(host: "fixture-ssh", ledger: remote)],
-            provider: provider, historyDays: 1)
+            provider: provider,
+            historyDays: 1)
         #expect(result.combined.totalTokens == 220)
         #expect(result.combined.duplicateCount == 1)
         #expect(result.combined.conflictCount == 0)
@@ -59,8 +60,8 @@ struct UsageLedgerMergeTests {
         let result = try Self.combine([local, Self.ledger([legacy])])
         #expect(result.combined.totalTokens == 0)
         #expect(result.combined.conflictCount == 1)
-        #expect(result.combined.unidentifiedCount == 1)
-        #expect(result.combined.legacyIdentityCount == 0)
+        #expect(result.combined.unidentifiedCount == 0)
+        #expect(result.combined.legacyIdentityCount == 1)
         #expect(!result.combined.coverageIsEstablished)
     }
 
@@ -76,7 +77,7 @@ struct UsageLedgerMergeTests {
         let result = try Self.combine([local, Self.ledger([legacy])])
         #expect(result.combined.totalTokens == 0)
         #expect(result.combined.conflictCount == 1)
-        #expect(result.combined.legacyIdentityCount == 0)
+        #expect(result.combined.legacyIdentityCount == 1)
         #expect(!result.combined.coverageIsEstablished)
     }
 
@@ -172,10 +173,13 @@ struct UsageLedgerMergeTests {
         #expect(first.combined.totalTokens == 110)
         #expect(first.combined.unidentifiedCount == 1)
         #expect(!first.combined.coverageIsEstablished)
-        let missing = try UsageLedgerMerger.merge(reports: [
-            .init(host: "local", ledger: Self.ledger([known])),
-            .init(host: "remote", ledger: nil, error: "Fixture source unavailable."),
-        ], provider: "codex", historyDays: 1)
+        let missing = try UsageLedgerMerger.merge(
+            reports: [
+                .init(host: "local", ledger: Self.ledger([known])),
+                .init(host: "remote", ledger: nil, error: "Fixture source unavailable."),
+            ],
+            provider: "codex",
+            historyDays: 1)
         #expect(missing.combined.totalTokens == 110)
         #expect(missing.combined.costUSD == 0.25)
         #expect(!missing.combined.coverageIsEstablished)
@@ -197,20 +201,46 @@ struct UsageLedgerMergeTests {
             Self.ledger([strong], provider: provider), Self.ledger([legacy], provider: provider),
         ], provider: provider)
         #expect(result.combined.totalTokens == strong.totalTokens)
-        #expect(result.combined.unidentifiedCount == 1)
-        #expect(result.combined.legacyIdentityCount == 0)
+        #expect(result.combined.unidentifiedCount == 0)
+        #expect(result.combined.legacyIdentityCount == 1)
         #expect(!result.combined.coverageIsEstablished)
     }
 
     @Test
-    func `legacy-only copied events count once with explicitly partial identity coverage`() throws {
+    func `legacy-only copies contribute no tokens or dollars without provider request identities`() throws {
         var row = Self.record("historical-event")
         row.identity = .legacyEvent
         let result = try Self.combine([Self.ledger([row]), Self.ledger([row])])
-        #expect(result.combined.totalTokens == 110)
-        #expect(result.combined.duplicateCount == 1)
-        #expect(result.combined.legacyIdentityCount == 1)
+        #expect(result.combined.totalTokens == 0)
+        #expect(result.combined.costUSD == nil)
+        #expect(result.combined.pricedCostUSD == nil)
+        #expect(result.combined.duplicateCount == 0)
+        #expect(result.combined.unidentifiedCount == 0)
+        #expect(result.combined.legacyIdentityCount == 2)
         #expect(!result.combined.coverageIsEstablished)
+    }
+
+    @Test
+    func `copied legacy events with changed indices cannot inflate request usage or priced subtotals`() throws {
+        var legacy = Self.record("legacy-event")
+        legacy.identity = .legacyEvent
+        legacy.id = UsageLedgerRecord.digest([
+            "codex", "legacy", "fixture-session", String(legacy.timestampUnixMs), "turn", "1",
+        ])
+        var copy = legacy
+        copy.id = UsageLedgerRecord.digest([
+            "codex", "legacy", "fixture-session", String(copy.timestampUnixMs), "turn", "2",
+        ])
+        #expect(legacy.id != copy.id)
+        let known = Self.record("provider-request")
+        let result = try Self.combine([Self.ledger([known, legacy]), Self.ledger([copy])])
+        #expect(result.combined.totalTokens == known.totalTokens)
+        #expect(result.combined.costUSD == known.costUSD)
+        #expect(result.combined.pricedCostUSD == known.costUSD)
+        #expect(result.combined.legacyIdentityCount == 2)
+        #expect(result.combined.duplicateCount == 0)
+        #expect(!result.combined.coverageIsEstablished)
+        #expect(result.reports.last?.ledger?.records == [copy])
     }
 
     @Test
@@ -222,8 +252,8 @@ struct UsageLedgerMergeTests {
         fallback.totalTokens += fallback.cacheReadTokens
         let result = try Self.combine([Self.ledger([request, fallback], provider: "claude")], provider: "claude")
         #expect(result.combined.totalTokens == 130)
-        #expect(result.combined.unidentifiedCount == 1)
-        #expect(result.combined.legacyIdentityCount == 0)
+        #expect(result.combined.unidentifiedCount == 0)
+        #expect(result.combined.legacyIdentityCount == 1)
         #expect(!result.combined.coverageIsEstablished)
     }
 
@@ -238,16 +268,17 @@ struct UsageLedgerMergeTests {
             : [Self.ledger([request]), Self.ledger([legacy])]
         let result = try Self.combine(ledgers)
         #expect(result.combined.totalTokens == 110)
-        #expect(result.combined.unidentifiedCount == 1)
-        #expect(result.combined.legacyIdentityCount == 0)
+        #expect(result.combined.unidentifiedCount == 0)
+        #expect(result.combined.legacyIdentityCount == 1)
         #expect(!result.combined.coverageIsEstablished)
     }
 
     @Test
-    func `unavailable or entirely withheld usage has unknown cost while complete empty history is measured zero`() throws {
+    func `unavailable or withheld usage has unknown cost while complete empty history is measured zero`() throws {
         let unavailable = try UsageLedgerMerger.merge(
             reports: [.init(host: "fixture-host", ledger: nil, error: "Fixture unavailable.")],
-            provider: "codex", historyDays: 1)
+            provider: "codex",
+            historyDays: 1)
         #expect(unavailable.combined.totalTokens == 0)
         #expect(unavailable.combined.costUSD == nil)
         #expect(!unavailable.combined.coverageIsEstablished)
@@ -325,22 +356,36 @@ struct UsageLedgerMergeTests {
 
     static func record(_ id: String) -> UsageLedgerRecord {
         .init(
-            id: UsageLedgerRecord.digest([id]), sessionID: UsageLedgerRecord.digest(["fixture-session"]),
-            identity: .request, timestampUnixMs: Int64(self.now.timeIntervalSince1970 * 1000) - 60000,
-            model: "fixture-model", inputTokens: 100, cacheReadTokens: 20, outputTokens: 10,
-            totalTokens: 110, costUSD: 0.25, reasoningTokens: 4, costProvenance: .listPriceEstimate,
-            pricingModel: "fixture-model", pricingMode: "standard")
+            id: UsageLedgerRecord.digest([id]),
+            sessionID: UsageLedgerRecord.digest(["fixture-session"]),
+            identity: .request,
+            timestampUnixMs: Int64(self.now.timeIntervalSince1970 * 1000) - 60000,
+            model: "fixture-model",
+            inputTokens: 100,
+            cacheReadTokens: 20,
+            outputTokens: 10,
+            totalTokens: 110,
+            costUSD: 0.25,
+            reasoningTokens: 4,
+            costProvenance: .listPriceEstimate,
+            pricingModel: "fixture-model",
+            pricingMode: "standard")
     }
 
     static func ledger(_ rows: [UsageLedgerRecord], provider: String = "codex") -> UsageLedger {
         .init(
-            provider: provider, updatedAt: self.now, historyDays: 1, bucketTimeZone: "UTC",
-            coverageIsEstablished: true, records: rows)
+            provider: provider,
+            updatedAt: self.now,
+            historyDays: 1,
+            bucketTimeZone: "UTC",
+            coverageIsEstablished: true,
+            records: rows)
     }
 
     static func combine(_ ledgers: [UsageLedger], provider: String = "codex") throws -> CombinedUsageLedgerReport {
         try UsageLedgerMerger.merge(
             reports: ledgers.enumerated().map { .init(host: "fixture-host-\($0.offset)", ledger: $0.element) },
-            provider: provider, historyDays: 1)
+            provider: provider,
+            historyDays: 1)
     }
 }

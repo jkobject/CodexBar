@@ -2519,13 +2519,13 @@
 "Incomplete requests excluded: %d" = "Incomplete requests excluded: %d";
 "Last 30 days — deduplicated" = "Last 30 days — deduplicated";
 "Last 30 days — recorded subtotal" = "Last 30 days — recorded subtotal";
-"Legacy record identities cannot establish that all cross-host overlaps were removed." = "Legacy record identities cannot establish that all cross-host overlaps were removed.";
+"Legacy records are excluded because their identities cannot reliably distinguish copied requests." = "Legacy records are excluded because their identities cannot reliably distinguish copied requests.";
 "Missing or conflicting prices: %d" = "Missing or conflicting prices: %d";
 "Native histories on this Mac and one SSH host. Runs only when requested; conversation text stays on each machine." = "Native histories on this Mac and one SSH host. Runs only when requested; conversation text stays on each machine.";
 "Reading usage histories…" = "Reading usage histories…";
 "Recorded cost or API-price estimate — not a billing receipt." = "Recorded cost or API-price estimate — not a billing receipt.";
 "SSH host alias" = "SSH host alias";
-"Unidentified records excluded: %d · Legacy identities: %d" = "Unidentified records excluded: %d · Legacy identities: %d";
+"Unidentified records excluded: %d · Legacy records excluded: %d" = "Unidentified records excluded: %d · Legacy records excluded: %d";
 "Usage history unavailable" = "Usage history unavailable";
 "Source diagnostics" = "Source diagnostics";
 

@@ -9,6 +9,88 @@ struct UsageLedgerClaudeTests {
         return value
     }
 
+    @Test(arguments: [false, true])
+    func `missing projects roots are unknown while a discovered empty root proves zero usage`(
+        createProjectsRoot: Bool) throws
+    {
+        let ledger = try self.load([:], createProjectsRoot: createProjectsRoot)
+        #expect(ledger.records.isEmpty)
+        #expect(ledger.coverageIsEstablished == createProjectsRoot)
+        let merged = try UsageLedgerMerger.merge(
+            reports: [.init(host: "local", ledger: ledger)], provider: "claude", historyDays: 1)
+        #expect(merged.combined.coverageIsEstablished == createProjectsRoot)
+        #expect(merged.combined.costUSD == (createProjectsRoot ? 0 : nil))
+        #expect(ledger.warnings.contains { $0.contains("fully read") } == !createProjectsRoot)
+    }
+
+    @Test(arguments: [false, true])
+    func `contradictory completed messages in one transcript cannot be revived by a clean remote copy`(
+        explicitCompletion: Bool) throws
+    {
+        let first = try self.event(input: 100, stopReason: explicitCompletion ? "end_turn" : nil)
+        let different = try self.event(input: 200, stopReason: explicitCompletion ? "end_turn" : nil)
+        let ledger = try self.load(["project/session.jsonl": first + "\n" + different + "\n" + first + "\n"])
+        #expect(ledger.records.count == 2)
+        #expect(Set(ledger.records.map(\.id)).count == 1)
+        #expect(Set(ledger.records.map(\.totalTokens)) == [190, 290])
+        #expect(ledger.conflictingRecordIDs?.count == 1)
+        #expect(!ledger.coverageIsEstablished)
+        let remote = try self.load(["project/session.jsonl": first + "\n"])
+        let merged = try UsageLedgerMerger.merge(
+            reports: [.init(host: "local", ledger: ledger), .init(host: "remote", ledger: remote)],
+            provider: "claude",
+            historyDays: 1)
+        #expect(merged.combined.conflictCount == 1)
+        #expect(merged.combined.totalTokens == 0)
+        #expect(merged.combined.costUSD == nil)
+        let json = try #require(String(data: JSONEncoder().encode(ledger), encoding: .utf8))
+        #expect(!json.contains("secret-conversation"))
+        #expect(!json.contains("private-message-id"))
+    }
+
+    @Test
+    func `output changes after explicit completion are contradictory rather than streaming growth`() throws {
+        let ledger = try self.load([
+            "project/session.jsonl": self.event(output: 10, stopReason: "end_turn") + "\n"
+                + self.event(output: 20, stopReason: "end_turn") + "\n",
+        ])
+        #expect(ledger.records.count == 2)
+        #expect(Set(ledger.records.map(\.totalTokens)) == [190, 200])
+        #expect(ledger.conflictingRecordIDs?.count == 1)
+        #expect(!ledger.coverageIsEstablished)
+    }
+
+    @Test(arguments: [0, 10])
+    func `an explicit unfinished stop reason excludes cache aware and output bearing fragments`(output: Int) throws {
+        let ledger = try self.load([
+            "project/session.jsonl": self.event(output: output, input: 0, stopReason: NSNull()) + "\n",
+        ])
+        #expect(ledger.records.isEmpty)
+        #expect(ledger.incompleteRequestCount == 1)
+        #expect(!ledger.coverageIsEstablished)
+        let merged = try UsageLedgerMerger.merge(
+            reports: [.init(host: "local", ledger: ledger)], provider: "claude", historyDays: 1)
+        #expect(merged.combined.costUSD == nil)
+        #expect(!merged.combined.coverageIsEstablished)
+    }
+
+    @Test
+    func `explicit partial chunks followed by a terminal cumulative message normalize without a conflict`() throws {
+        let ledger = try self.load([
+            "project/session.jsonl": [
+                self.event(output: 10, stopReason: NSNull()),
+                self.event(output: 20, stopReason: NSNull()),
+                self.event(output: 30, stopReason: "tool_use"),
+                self.event(output: 30, stopReason: "tool_use"),
+            ].joined(separator: "\n") + "\n",
+        ])
+        #expect(ledger.records.count == 1)
+        #expect(ledger.records.first?.totalTokens == 210)
+        #expect(ledger.incompleteRequestCount == 0)
+        #expect(ledger.conflictingRecordIDs == nil)
+        #expect(ledger.coverageIsEstablished)
+    }
+
     @Test
     func `native copies and streaming chunks export one private usage record`() throws {
         let first = try self.event(output: 10)
@@ -213,7 +295,8 @@ struct UsageLedgerClaudeTests {
             provider: "claude",
             historyDays: 1)
         #expect(combined.combined.totalTokens == 190)
-        #expect(combined.combined.unidentifiedCount == 1)
+        #expect(combined.combined.unidentifiedCount == 0)
+        #expect(combined.combined.legacyIdentityCount == 1)
         #expect(!combined.combined.coverageIsEstablished)
     }
 
@@ -321,7 +404,8 @@ struct UsageLedgerClaudeTests {
         output: Int = 10,
         input: Int = 100,
         timestamp: String = "2026-10-10T12:00:00Z",
-        model: String = "claude-sonnet-4-20250514") throws -> String
+        model: String = "claude-sonnet-4-20250514",
+        stopReason: Any? = nil) throws -> String
     {
         var messageValue: [String: Any] = [
             "model": model,
@@ -335,6 +419,7 @@ struct UsageLedgerClaudeTests {
             ],
         ]
         messageValue["id"] = message
+        messageValue["stop_reason"] = stopReason
         var object: [String: Any] = ["type": "assistant", "timestamp": timestamp, "message": messageValue]
         object["sessionId"] = session
         object["requestId"] = request
@@ -346,12 +431,16 @@ struct UsageLedgerClaudeTests {
     private func load(
         _ files: [String: String],
         now: Date? = nil,
+        createProjectsRoot: Bool = true,
         checkCancellation: CostUsageScanner.CancellationCheck? = nil) throws -> UsageLedger
     {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let projects = root.appendingPathComponent("projects")
         let cache = root.appendingPathComponent("cache")
+        if createProjectsRoot {
+            try FileManager.default.createDirectory(at: projects, withIntermediateDirectories: true)
+        }
         for (path, contents) in files {
             let url = projects.appendingPathComponent(path)
             try FileManager.default.createDirectory(

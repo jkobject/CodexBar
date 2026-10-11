@@ -137,6 +137,7 @@ extension CostUsageScanner {
         pricingResolver: CostUsagePricing.ClaudeResolver,
         diagnoseRejectedUsage: Bool = false,
         timestampWindowUnixMs: ClosedRange<Int64>? = nil,
+        onLedgerRow: ((ClaudeUsageRow, Bool) -> Void)? = nil,
         checkCancellation: CancellationCheck? = nil) throws -> ClaudeParseResult
     {
         func toInt(_ v: Any?) -> Int {
@@ -240,11 +241,12 @@ extension CostUsageScanner {
                             usage: usage,
                             total: cacheCreate)
 
-                        // Proxies may put a local, cache-unaware estimate in message_start.
-                        // Missing stop_reason alone is not evidence of incomplete legacy usage.
-                        let isIncomplete = message["stop_reason"] is NSNull && input > 0 && output == 0
-                            && usage["cache_read_input_tokens"] == nil
-                            && usage["cache_creation_input_tokens"] == nil
+                        let isIncomplete = Self.claudeUsageIsIncomplete(
+                            message: message,
+                            usage: usage,
+                            input: input,
+                            output: output,
+                            isLedgerExport: timestampWindowUnixMs != nil)
                         #if DEBUG
                         if !isIncomplete { recordClaudeScanWork(.claudeCostCalculation) }
                         #endif
@@ -283,6 +285,8 @@ extension CostUsageScanner {
                             costPriced: costNanos != nil,
                             isIncomplete: isIncomplete ? true : nil)
 
+                        // Export-only observation retains numeric evidence before last-chunk normalization.
+                        onLedgerRow?(row, Self.claudeHasExplicitCompletion(message))
                         // Keep the final cumulative chunk for each response.
                         if let key = Self.claudeCanonicalRowKey(row) {
                             if Self.shouldReplaceClaudeRow(keyedRows[key], with: row) {
@@ -302,6 +306,24 @@ extension CostUsageScanner {
         let rows = Self.orderedClaudeRows(keyed: keyedRows, unkeyed: unkeyedRows)
         return ClaudeParseResult(
             rows: rows, parsedBytes: parsedBytes, rejectedUsageLineCount: rejectedUsageLineCount)
+    }
+
+    private static func claudeUsageIsIncomplete(
+        message: ClaudeJSONObject,
+        usage: ClaudeJSONObject,
+        input: Int,
+        output: Int,
+        isLedgerExport: Bool) -> Bool
+    {
+        // An explicit null stop_reason denotes an unfinished API message, even after output/cache usage arrives.
+        // Ordinary native scans keep their historical proxy heuristic; missing legacy metadata is not guessed.
+        message["stop_reason"] is NSNull && (isLedgerExport || (input > 0 && output == 0
+                && usage["cache_read_input_tokens"] == nil && usage["cache_creation_input_tokens"] == nil))
+    }
+
+    private static func claudeHasExplicitCompletion(_ message: ClaudeJSONObject) -> Bool {
+        guard let reason = message["stop_reason"] as? String else { return false }
+        return !reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private static func claudeOneHourCacheCreationTokens(usage: ClaudeJSONObject, total: Int) -> Int {
@@ -625,6 +647,7 @@ extension CostUsageScanner {
     private struct ClaudeSourceInventory {
         var files: [String: ClaudeSourceFile] = [:]
         var incompleteSourceCount = 0
+        var discoveredRootCount = 0
 
         var stamps: [String: CostUsageClaudeFileStamp] {
             self.files.mapValues(\.stamp)
@@ -720,6 +743,7 @@ extension CostUsageScanner {
                 inventory.incompleteSourceCount += 1
                 continue
             }
+            inventory.discoveredRootCount += 1
 
             for case let url as URL in enumerator {
                 try checkCancellation?()
@@ -750,8 +774,10 @@ extension CostUsageScanner {
             checkCancellation: checkCancellation)
         let pricing = CostUsagePricing.ClaudeResolver(now: now, cacheRoot: options.cacheRoot)
         var cache = CostUsageCache()
-        var incompleteSourceCount = inventory.incompleteSourceCount
+        // Missing optional roots are normal, but no discovered root cannot prove an empty history.
+        var incompleteSourceCount = inventory.incompleteSourceCount + (inventory.discoveredRootCount == 0 ? 1 : 0)
         var rejectedUsageLineCount = 0
+        var completedRows: [ClaudeUsageRow] = []
         let windowEndUnixMs = Int64((now.timeIntervalSince1970 * 1000).rounded())
         guard let since = CostUsageLocalDay.date(fromKey: range.sinceKey, calendar: range.calendar), since <= now else {
             throw UsageLedgerError.invalid("Unable to establish the requested history window.")
@@ -760,6 +786,8 @@ extension CostUsageScanner {
         for path in inventory.files.keys.sorted() {
             try checkCancellation?()
             guard let source = inventory.files[path] else { continue }
+            var previousRows: [ClaudeRowKey: (row: ClaudeUsageRow, isCompleted: Bool)] = [:]
+            var conflictingKeys: Set<ClaudeRowKey> = []
             let parsed = try Self.parseClaudeFileCancellable(
                 fileURL: source.url,
                 range: range,
@@ -767,6 +795,18 @@ extension CostUsageScanner {
                 pricingResolver: pricing,
                 diagnoseRejectedUsage: true,
                 timestampWindowUnixMs: timestampWindowUnixMs,
+                onLedgerRow: { row, isCompleted in
+                    guard row.isIncomplete != true, let key = Self.claudeCanonicalRowKey(row),
+                          !conflictingKeys.contains(key)
+                    else { return }
+                    if let previous = previousRows[key], !Self.claudeLedgerUsageMatches(previous.row, row),
+                       previous.isCompleted || !Self.claudeLedgerStreamingUpdateMatches(previous.row, row)
+                    {
+                        completedRows.append(contentsOf: [previous.row, row])
+                        conflictingKeys.insert(key)
+                    }
+                    previousRows[key] = (row, isCompleted || previousRows[key]?.isCompleted == true)
+                },
                 checkCancellation: checkCancellation)
             rejectedUsageLineCount += parsed.rejectedUsageLineCount
             if parsed.parsedBytes < source.stamp.size {
@@ -779,19 +819,22 @@ extension CostUsageScanner {
                 claudeRows: parsed.rows)
         }
         try checkCancellation?()
-        let observations = try Self.claudeLedgerObservations(cache: cache, checkCancellation: checkCancellation)
+        let observations = try Self.claudeLedgerObservations(
+            cache: cache, completedRows: completedRows, checkCancellation: checkCancellation)
         return (observations.rows, observations.conflictingRows, incompleteSourceCount, rejectedUsageLineCount)
     }
 
-    /// Each file has already normalized cumulative chunks. Preserve contradictory completed copies for quarantine.
+    /// Compare terminal observations before normalization, then normalized copies, preserving cumulative chunks.
     private static func claudeLedgerObservations(
         cache: CostUsageCache,
+        completedRows: [ClaudeUsageRow],
         checkCancellation: CancellationCheck?) throws -> (rows: [ClaudeUsageRow], conflictingRows: [ClaudeUsageRow])
     {
         var firstRows: [ClaudeRowKey: ClaudeUsageRow] = [:]
         var conflicts: [ClaudeRowKey: (ClaudeUsageRow, ClaudeUsageRow)] = [:]
-        for path in cache.files.keys.sorted() {
-            for row in cache.files[path]?.claudeRows ?? [] {
+        let rowGroups = [completedRows] + cache.files.keys.sorted().map { cache.files[$0]?.claudeRows ?? [] }
+        for group in rowGroups {
+            for row in group {
                 try checkCancellation?()
                 guard row.isIncomplete != true, let key = Self.claudeCanonicalRowKey(row),
                       conflicts[key] == nil
@@ -819,6 +862,13 @@ extension CostUsageScanner {
 
     private static func claudeLedgerUsageMatches(_ lhs: ClaudeUsageRow, _ rhs: ClaudeUsageRow) -> Bool {
         lhs.model == rhs.model && lhs.input == rhs.input && lhs.output == rhs.output
+            && lhs.cacheRead == rhs.cacheRead && lhs.cacheCreate == rhs.cacheCreate
+            && (lhs.cacheCreate1h ?? 0) == (rhs.cacheCreate1h ?? 0)
+    }
+
+    /// Legacy cumulative chunks may increase output while their already reported input/model stays fixed.
+    private static func claudeLedgerStreamingUpdateMatches(_ lhs: ClaudeUsageRow, _ rhs: ClaudeUsageRow) -> Bool {
+        lhs.model == rhs.model && lhs.input == rhs.input && lhs.output <= rhs.output
             && lhs.cacheRead == rhs.cacheRead && lhs.cacheCreate == rhs.cacheCreate
             && (lhs.cacheCreate1h ?? 0) == (rhs.cacheCreate1h ?? 0)
     }

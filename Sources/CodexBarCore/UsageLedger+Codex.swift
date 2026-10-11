@@ -37,6 +37,11 @@ extension UsageLedgerLoader {
             let privateCache = try CodexLedgerCache(root: cacheRoot, checkCancellation: checkCancellation)
             defer { privateCache.release() }
             let roots = CostUsageScanner.codexSessionsRoots(options: options)
+            guard roots.contains(where: { root in
+                var isDirectory: ObjCBool = false
+                return FileManager.default.fileExists(atPath: root.path, isDirectory: &isDirectory)
+                    && isDirectory.boolValue && FileManager.default.isReadableFile(atPath: root.path)
+            }) else { throw UsageLedgerError.invalid("Native Codex usage history is unavailable.") }
             var inventory = try CodexLedgerCache.inventory(roots: roots, checkCancellation: checkCancellation)
             let previous = try privateCache.prepare(inventory: &inventory, checkCancellation: checkCancellation)
             options.forceRescan = options.forceRescan || previous == nil

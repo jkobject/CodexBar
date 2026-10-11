@@ -98,17 +98,16 @@ as a subtotal with explicit unpriced request counts. An entirely unknown-priced 
 only a proven empty window can display zero.
 
 Native exporters detect disagreements before selecting same-host copies. Codex observes owned request
-records before replay suppression; Claude compares completed, already-normalized per-file responses.
+records before replay suppression; Claude observes explicitly completed responses before per-file collapse and compares normalized historical responses.
 Legitimate cumulative streaming updates remain normalized by the native reader. Conflict hashes are
 carried independently of numeric rows, so redaction or an overflowing row cannot revive that identity
 through a clean observation on the other host. Detection uses the exact requested timestamp window.
 
-Legacy event identities are weaker evidence. The result reports their count and cannot establish full
-cross-host coverage while they remain. When a session has different request/legacy representations
-and no proven alias, its ambiguous legacy rows are withheld even if both representations came from
-copied files on the same machine. If any strong request record lacks session provenance, all legacy
-rows are withheld because the available metadata cannot disprove an overlap. Records without stable
-identity are also withheld. This can undercount rather than invent certainty about an overlap.
+Only strong request/response identities enter the combined token and dollar totals. All legacy event
+and unidentified records are excluded before copy matching, pricing or daily projection. Event indices
+can change when a history is copied or rewritten, so even matching legacy hashes do not establish that
+two observations represent one request. Their exclusion counts remain visible. Native exports retain
+those numeric rows for diagnostics; the combined total can undercount rather than invent certainty.
 
 Complete coverage requires readable source reports, established native scan coverage, no excluded
 incomplete requests, no usage conflicts, no unidentified or ambiguously represented records and no

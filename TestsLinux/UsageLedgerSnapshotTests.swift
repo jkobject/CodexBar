@@ -19,14 +19,17 @@ struct UsageLedgerSnapshotTests {
         unknown.costProvenance = .unknown
         var withheld = Self.record("anonymous")
         withheld.identity = .unidentified
+        var legacy = Self.record("legacy")
+        legacy.identity = .legacyEvent
         let report = try Self.report([
-            Self.ledger([estimate, metered, unknown, withheld]), Self.ledger([estimate]),
+            Self.ledger([estimate, metered, unknown, withheld, legacy]), Self.ledger([estimate]),
         ])
         let snapshot = try UsageLedgerMerger.tokenSnapshot(report: report)
         let daily = try #require(snapshot.daily.first)
         #expect(report.combined.totalTokens == 330)
         #expect(report.combined.duplicateCount == 1)
         #expect(report.combined.unidentifiedCount == 1)
+        #expect(report.combined.legacyIdentityCount == 1)
         #expect(report.combined.costUSD == nil)
         #expect(report.combined.pricedCostUSD == 0.75)
         #expect(snapshot.last30DaysTokens == report.combined.totalTokens)
@@ -42,6 +45,24 @@ struct UsageLedgerSnapshotTests {
         #expect(daily.cacheReadTokens == 60)
         #expect(daily.outputTokens == 30)
         #expect(daily.reasoningTokens == 12)
+    }
+
+    @Test(arguments: [UsageLedgerIdentity.legacyEvent, .unidentified])
+    func `weak identities cannot become dashboard tokens costs or measured empty usage`(
+        identity: UsageLedgerIdentity) throws
+    {
+        var weak = Self.record("withheld-identity")
+        weak.identity = identity
+        let report = try Self.report([Self.ledger([weak])])
+        let snapshot = try UsageLedgerMerger.tokenSnapshot(report: report)
+        #expect(snapshot.last30DaysTokens == 0)
+        #expect(snapshot.last30DaysRequests == 0)
+        #expect(snapshot.last30DaysCostUSD == nil)
+        #expect(snapshot.sessionCostUSD == nil)
+        #expect(snapshot.meteredCostUSD == nil)
+        #expect(snapshot.daily.isEmpty)
+        #expect(snapshot.historyScanIsPartial)
+        #expect(!snapshot.historyCoverageIsEstablished)
     }
 
     @Test

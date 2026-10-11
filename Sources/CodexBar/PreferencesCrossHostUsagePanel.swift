@@ -146,7 +146,7 @@ struct CrossHostUsagePanel: View {
             Text(L("Duplicates removed: %d · Conflicts excluded: %d", combined.duplicateCount, combined.conflictCount))
                 .font(.caption)
             Text(L(
-                "Unidentified records excluded: %d · Legacy identities: %d",
+                "Unidentified records excluded: %d · Legacy records excluded: %d",
                 combined.unidentifiedCount,
                 combined.legacyIdentityCount))
                 .font(.caption)
@@ -157,7 +157,7 @@ struct CrossHostUsagePanel: View {
                     .foregroundStyle(.secondary)
             }
             if combined.legacyIdentityCount > 0 {
-                Text(L("Legacy record identities cannot establish that all cross-host overlaps were removed."))
+                Text(L("Legacy records are excluded because their identities cannot reliably distinguish copied requests."))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

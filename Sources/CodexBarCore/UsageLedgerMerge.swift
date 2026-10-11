@@ -21,6 +21,7 @@ public struct UsageLedgerCombinedTotals: Codable, Sendable {
     public var duplicateCount: Int
     public var conflictCount: Int
     public var unidentifiedCount: Int
+    /// Legacy observations withheld before accounting; copies are counted separately because their identities are weak.
     public var legacyIdentityCount: Int
     public var unpricedCount: Int
     public var coverageIsEstablished: Bool
@@ -105,7 +106,7 @@ extension UsageLedger {
 }
 
 public enum UsageLedgerMerger {
-    /// Union stable identities before summing. Contradictions and anonymous usage remain withheld.
+    /// Union provider request identities before summing. Contradictions and weaker identities remain withheld.
     public static func merge(
         reports: [UsageLedgerHostReport], provider: String, historyDays: Int) throws -> CombinedUsageLedgerReport
     {
@@ -131,35 +132,21 @@ public enum UsageLedgerMerger {
                     && $0.bucketTimeZone == first.bucketTimeZone
             }) else { throw UsageLedgerError.invalid("Usage ledgers have different reporting windows.") }
         }
-        // A legacy counter and a request ledger can represent the same response differently.
-        // Without a proven alias, withhold that session's legacy rows instead of counting both.
         var conflicts = Set(ledgers.flatMap { $0.conflictingRecordIDs ?? [] })
-        var requestSessions = Set<String>()
-        var observedConflictIDs = Set<String>()
-        var requestWithoutSession = false
-        for ledger in ledgers {
-            for row in ledger.records where row.identity == .request || conflicts.contains(row.id) {
-                if conflicts.contains(row.id) { observedConflictIDs.insert(row.id) }
-                if let session = row.sessionID {
-                    requestSessions.insert(session)
-                } else {
-                    requestWithoutSession = true
-                }
-            }
-        }
-        // A rejected numeric row can leave a conflict hash without surviving session provenance.
-        // Its legacy representation cannot safely be distinguished from another source's rows.
-        if !conflicts.isSubset(of: observedConflictIDs) { requestWithoutSession = true }
         var unique: [String: UsageLedgerRecord] = [:]
         var priceConflicts = Set<String>()
         var duplicates = 0
         var unidentified = 0
+        var legacy = 0
         for ledger in ledgers {
             for row in ledger.records {
-                let mixedRepresentation = row.identity == .legacyEvent
-                    && (requestWithoutSession || row.sessionID.map(requestSessions.contains) == true)
-                guard row.identity != .unidentified, !mixedRepresentation else {
-                    unidentified += 1
+                // Event indices and fallback identities can change between copies; only request IDs establish a union.
+                guard row.identity == .request else {
+                    if row.identity == .legacyEvent {
+                        legacy += 1
+                    } else {
+                        unidentified += 1
+                    }
                     continue
                 }
                 if conflicts.contains(row.id) { continue }
@@ -194,7 +181,6 @@ public enum UsageLedgerMerger {
         }
         let unpriced = rows.filter { $0.costUSD == nil }.count
         let tokens = try UsageLedger.checkedSum(rows.map(\.totalTokens))
-        let legacy = rows.filter { $0.identity == .legacyEvent }.count
         let complete = !reports.isEmpty && reports.allSatisfy { $0.ledger != nil && $0.error == nil }
             && ledgers.allSatisfy { $0.coverageIsEstablished && $0.incompleteRequestCount == 0 }
             && conflicts.isEmpty && unidentified == 0 && legacy == 0
@@ -222,8 +208,7 @@ public enum UsageLedgerMerger {
     }
 
     private static func sameUsage(_ lhs: UsageLedgerRecord, _ rhs: UsageLedgerRecord) -> Bool {
-        (lhs.identity == .request || lhs.sessionID == rhs.sessionID)
-            && lhs.identity == rhs.identity && lhs.model == rhs.model
+        lhs.model == rhs.model
             && lhs.inputTokens == rhs.inputTokens && lhs.cacheReadTokens == rhs.cacheReadTokens
             && lhs.cacheWriteTokens == rhs.cacheWriteTokens && lhs.cacheWrite1hTokens == rhs.cacheWrite1hTokens
             && lhs.outputTokens == rhs.outputTokens && lhs.reasoningTokens == rhs.reasoningTokens

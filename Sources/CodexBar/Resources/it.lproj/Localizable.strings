@@ -2519,13 +2519,13 @@
 "Incomplete requests excluded: %d" = "Richieste incomplete escluse: %d";
 "Last 30 days — deduplicated" = "Ultimi 30 giorni — senza duplicati";
 "Last 30 days — recorded subtotal" = "Ultimi 30 giorni — subtotale registrato";
-"Legacy record identities cannot establish that all cross-host overlaps were removed." = "Le identità delle registrazioni precedenti non consentono di garantire che tutte le sovrapposizioni tra computer siano state eliminate.";
+"Legacy records are excluded because their identities cannot reliably distinguish copied requests." = "Le registrazioni precedenti sono escluse perché i loro identificatori non distinguono in modo affidabile le richieste copiate.";
 "Missing or conflicting prices: %d" = "Tariffe mancanti o contraddittorie: %d";
 "Native histories on this Mac and one SSH host. Runs only when requested; conversation text stays on each machine." = "Cronologie native su questo Mac e su un server SSH. La raccolta avviene solo su richiesta; il testo delle conversazioni resta su ciascun computer.";
 "Reading usage histories…" = "Lettura delle cronologie di utilizzo…";
 "Recorded cost or API-price estimate — not a billing receipt." = "Costo registrato o stima alle tariffe API — non è una fattura.";
 "SSH host alias" = "Alias del server SSH";
-"Unidentified records excluded: %d · Legacy identities: %d" = "Registrazioni non identificate escluse: %d · Identità precedenti: %d";
+"Unidentified records excluded: %d · Legacy records excluded: %d" = "Registrazioni non identificate escluse: %d · Registrazioni precedenti escluse: %d";
 "Usage history unavailable" = "Cronologia di utilizzo non disponibile";
 "Source diagnostics" = "Diagnostica della fonte";
 

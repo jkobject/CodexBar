@@ -45,9 +45,11 @@ is already captured; the regression itself needs no network or credentials.
 ## Contradictions, pricing and compatibility
 
 The focused native exporter regressions exercise copied and same-file Codex request contradictions,
-completed Claude copy contradictions, zero-count copies, model redaction, overflow, valid cumulative
+completed and non-cumulative Claude contradictions within one file and between copies, zero-count copies, model redaction, overflow, valid cumulative
 streaming, incomplete-to-complete normalization and exact fractional-millisecond boundaries. A clean
 observation from another host cannot revive a native conflict, including when its numeric row was omitted.
+Explicitly unfinished Claude messages are excluded for every token mix; absent history roots cannot
+establish a measured empty window. A discovered readable empty root is tested separately.
 
 The Codex installed-pricing regression uses a separate synthetic models.dev catalog with a $2/million
 uncached input rate: 100,000 input tokens cost $0.20. It checks unchanged catalog bytes and that no cost
@@ -69,7 +71,9 @@ Code providers include that host during ordinary cost refreshes. The normal menu
 top-level provider widgets use the deduplicated union rather than adding a remote total to a local total.
 Account-specific widgets and ordinary cost caches retain their account scope. Collection covers at most
 365 days, and shorter display periods project the same accepted identity union. Missing sources, excluded
-identities and unknown prices remain explicit limitations or recorded subtotals.
+identities and unknown prices remain explicit limitations or recorded subtotals. Only strong request
+identities enter this union. All legacy event and anonymous observations are excluded before totals
+and projections; copied legacy rows with changed event indices cannot inflate the combined result.
 
 The integration regressions cover ordinary refresh publication, a joined refresh captured by the spend
 dashboard, widget totals, retirement of a pending old-host result, cancellation, and source failures.

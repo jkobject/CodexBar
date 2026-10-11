@@ -4,6 +4,25 @@ import Testing
 
 struct UsageLedgerCodexCacheTests {
     @Test
+    func `missing history roots are unavailable while a readable empty root establishes zero`() async throws {
+        let fixture = try UsageLedgerCodexTests.NativeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        _ = try await Self.load(fixture)
+        let empty = try await Self.load(fixture)
+        #expect(empty.records.isEmpty)
+        #expect(empty.coverageIsEstablished)
+        let combined = try UsageLedgerMerger.merge(
+            reports: [.init(host: "local", ledger: empty)], provider: "codex", historyDays: 1)
+        #expect(combined.combined.totalTokens == 0)
+        #expect(combined.combined.costUSD == 0)
+        #expect(combined.combined.coverageIsEstablished)
+        try FileManager.default.removeItem(at: fixture.sessions)
+        await #expect(throws: UsageLedgerError.self) {
+            try await Self.load(fixture)
+        }
+    }
+
+    @Test
     func `warm native exports skip historical parsing and resume only appended requests`() async throws {
         let fixture = try UsageLedgerCodexTests.NativeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }

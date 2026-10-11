@@ -106,8 +106,8 @@ extension CodexBarCLI {
             "\(report.provider) · experimental cross-host native history",
             "\(label): \(totals.totalTokens) tokens · API-rate cost: \(cost)",
             "Copies removed: \(totals.duplicateCount); conflicting identities: \(totals.conflictCount); " +
-                "unidentified/ambiguous records withheld: \(totals.unidentifiedCount)",
-            "Legacy event identities: \(totals.legacyIdentityCount); " +
+                "unidentified records excluded: \(totals.unidentifiedCount)",
+            "Legacy records excluded: \(totals.legacyIdentityCount); " +
                 "missing/conflicting prices: \(totals.unpricedCount)",
         ]
         for source in report.reports {

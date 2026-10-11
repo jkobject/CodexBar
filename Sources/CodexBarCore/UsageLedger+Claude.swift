@@ -121,7 +121,7 @@ extension UsageLedgerLoader {
             historyDays: historyDays,
             bucketTimeZone: calendar.timeZone.identifier,
             coverageIsEstablished: scanned.incompleteSourceCount == 0 && overflowCount == 0
-                && scanned.rejectedUsageLineCount == 0 && scanned.conflictingRows.isEmpty,
+                && scanned.rejectedUsageLineCount == 0 && scanned.conflictingRows.isEmpty && incompleteCount == 0,
             records: records,
             incompleteRequestCount: incompleteCount,
             warnings: warnings)
