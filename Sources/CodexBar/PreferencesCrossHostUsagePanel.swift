@@ -159,7 +159,8 @@ struct CrossHostUsagePanel: View {
             if combined.legacyIdentityCount > 0 {
                 Text(
                     L(
-                        "Legacy records are excluded because their identities cannot reliably distinguish copied requests."))
+                        "Legacy records are excluded because their identities "
+                            + "cannot reliably distinguish copied requests."))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
