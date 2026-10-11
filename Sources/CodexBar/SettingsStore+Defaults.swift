@@ -527,6 +527,35 @@ extension SettingsStore {
         }
     }
 
+    /// One opt-in SSH host shared by native usage histories; an empty value disables remote collection.
+    var crossHostUsageHost: String {
+        self.defaultsState.crossHostUsageHost
+    }
+
+    /// Validate before changing either settings or scheduling. Removing the host clears its saved preference.
+    func setCrossHostUsageHost(_ host: String) throws {
+        let normalized = try Self.normalizedCrossHostUsageHost(host)
+        guard normalized != self.crossHostUsageHost else { return }
+        if !normalized.isEmpty, !self.costUsageEnabled { self.costUsageEnabled = true }
+        self.defaultsState.crossHostUsageHost = normalized
+        if normalized.isEmpty {
+            self.userDefaults.removeObject(forKey: "crossHostUsageHost")
+        } else {
+            self.userDefaults.set(normalized, forKey: "crossHostUsageHost")
+        }
+        self.costUsageSettingsRevision &+= 1
+        self.noteBackgroundWorkSettingsChanged()
+    }
+
+    static func normalizedCrossHostUsageHost(_ host: String) throws -> String {
+        let normalized = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !normalized.isEmpty {
+            // Provider-specific by design: Both native history exporters reuse the Codex SSH argument validator.
+            try RemoteCodexCostFetcher.validateHost(normalized)
+        }
+        return normalized
+    }
+
     var codexLocalSessionCostLedgerEnabled: Bool {
         get { self.defaultsState.codexLocalSessionCostLedgerEnabled }
         set {

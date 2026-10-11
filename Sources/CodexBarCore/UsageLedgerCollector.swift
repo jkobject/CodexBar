@@ -43,6 +43,7 @@ public struct RemoteUsageLedgerFetcher: Sendable {
         let command = "if command -v codexbar >/dev/null 2>&1; then exec codexbar \(options); " +
             "else exec /Applications/CodexBar.app/Contents/Helpers/CodexBarCLI \(options); fi"
         return [
+            "-C",
             "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "StrictHostKeyChecking=yes",
             "-o", "RemoteCommand=none", "-o", "RequestTTY=no", "-o", "ForwardAgent=no",
             "-o", "ClearAllForwardings=yes", "-T", "-n", "--", host, "sh", "-lc", "'\(command)'",
@@ -83,13 +84,16 @@ public struct RemoteUsageLedgerFetcher: Sendable {
 }
 
 public enum UsageLedgerCollector {
-    /// Explicit local plus SSH collection; an unavailable source never erases the other source's records.
+    package typealias Loader = @Sendable () async throws -> UsageLedger
+
+    /// Concurrent local plus SSH collection; an unavailable source never erases the other's records.
     public static func collect(
         provider: UsageProvider,
         host: String,
         historyDays: Int = 30,
         calendar: Calendar = .current,
-        now: Date = Date()) async throws -> CombinedUsageLedgerReport
+        now: Date = Date(),
+        progress: (@Sendable (String, String) -> Void)? = nil) async throws -> CombinedUsageLedgerReport
     {
         let now = UsageLedgerLoader.canonicalDate(now)
         try RemoteCodexCostFetcher.validateHost(host)
@@ -98,33 +102,57 @@ public enum UsageLedgerCollector {
             throw UsageLedgerError.invalid("Only native Codex and Claude history is supported.")
         }
         let name = provider == .codex ? "codex" : "claude"
-        var reports: [UsageLedgerHostReport] = []
-        do {
-            let ledger = try await UsageLedgerLoader.load(
-                provider: provider, historyDays: historyDays, now: now, calendar: calendar)
-            try ledger.validate(provider: name, historyDays: historyDays)
-            reports.append(.init(host: "local", ledger: ledger))
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch {
-            try Task.checkCancellation()
-            reports.append(.init(host: "local", ledger: nil, error: "Local native history is unavailable."))
+        return try await Self.collect(
+            provider: name,
+            host: host,
+            historyDays: historyDays,
+            local: {
+                try await UsageLedgerLoader.load(
+                    provider: provider, historyDays: historyDays, now: now, calendar: calendar)
+            },
+            remote: {
+                try await RemoteUsageLedgerFetcher().fetch(
+                    host: host, provider: provider, historyDays: historyDays, now: now, calendar: calendar)
+            },
+            progress: progress)
+    }
+
+    package static func collect(
+        provider: String,
+        host: String,
+        historyDays: Int,
+        local: @escaping Loader,
+        remote: @escaping Loader,
+        progress: (@Sendable (String, String) -> Void)? = nil) async throws -> CombinedUsageLedgerReport
+    {
+        let reports = try await withThrowingTaskGroup(of: UsageLedgerHostReport.self) { group in
+            for (source, loader) in [("local", local), (host, remote)] {
+                group.addTask {
+                    progress?(source, "reading")
+                    do {
+                        let ledger = try await loader()
+                        try Task.checkCancellation()
+                        try ledger.validate(provider: provider, historyDays: historyDays)
+                        progress?(source, "finished")
+                        return .init(host: source, ledger: UsageLedgerPricing.repriceMissing(ledger))
+                    } catch is CancellationError {
+                        throw CancellationError()
+                    } catch {
+                        try Task.checkCancellation()
+                        progress?(source, "unavailable")
+                        let error = source == "local" ? "Local native history is unavailable."
+                            : "Remote history unavailable. Check SSH and install a CLI supporting --ledger-only."
+                        return .init(host: source, ledger: nil, error: error)
+                    }
+                }
+            }
+            var results: [UsageLedgerHostReport] = []
+            for try await result in group {
+                results.append(result)
+            }
+            return results.sorted { $0.host == "local" && $1.host != "local" }
         }
         try Task.checkCancellation()
-        do {
-            let ledger = try await RemoteUsageLedgerFetcher().fetch(
-                host: host, provider: provider, historyDays: historyDays, now: now, calendar: calendar)
-            reports.append(.init(host: host, ledger: ledger))
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch {
-            try Task.checkCancellation()
-            reports.append(.init(
-                host: host,
-                ledger: nil,
-                error: "Remote history unavailable. Check SSH and install a CLI supporting --ledger-only."))
-        }
-        try Task.checkCancellation()
-        return try UsageLedgerMerger.merge(reports: reports, provider: name, historyDays: historyDays)
+        return try UsageLedgerMerger.merge(reports: reports, provider: provider, historyDays: historyDays)
     }
 }

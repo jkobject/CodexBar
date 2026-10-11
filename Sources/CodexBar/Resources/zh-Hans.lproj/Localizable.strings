@@ -2517,3 +2517,20 @@
 "Unidentified records excluded: %d · Legacy identities: %d" = "Unidentified records excluded: %d · Legacy identities: %d";
 "Usage history unavailable" = "Usage history unavailable";
 "Source diagnostics" = "Source diagnostics";
+
+/* Saved cross-host usage settings; English fallback pending translation. */
+"Add host" = "Add host";
+"Remove host" = "Remove host";
+"Add one SSH host to include its native histories in normal usage refreshes. Conversation text stays on each machine." = "Add one SSH host to include its native histories in normal usage refreshes. Conversation text stays on each machine.";
+"Included automatically for Codex and Claude Code. Remove the host to return to local usage." = "Included automatically for Codex and Claude Code. Remove the host to return to local usage.";
+"Enter a valid SSH host alias, without spaces or command options." = "Enter a valid SSH host alias, without spaces or command options.";
+"Deduplicated usage" = "Deduplicated usage";
+"Recorded subtotal" = "Recorded subtotal";
+
+"This Mac + %@" = "This Mac + %@";
+"%@ · This Mac + %@" = "%@ · This Mac + %@";
+"This Mac + %@ · Last %d days" = "This Mac + %@ · Last %d days";
+"SSH history is limited to the last 365 days." = "SSH history is limited to the last 365 days.";
+
+"Read complete" = "Read complete";
+"Cost includes only records with known prices." = "Cost includes only records with known prices.";

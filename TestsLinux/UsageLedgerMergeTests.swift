@@ -5,6 +5,13 @@ import Testing
 struct UsageLedgerMergeTests {
     static let now = Date(timeIntervalSince1970: 1_788_177_600)
 
+    @Test
+    func `Codex cached input cannot exceed its inclusive native input total`() throws {
+        var row = Self.record("invalid-cache-category")
+        row.cacheReadTokens = row.inputTokens + 1
+        #expect(throws: UsageLedgerError.self) { try Self.combine([Self.ledger([row])]) }
+    }
+
     @Test(arguments: ["codex", "claude"])
     func `captured native Mac and real SSH fixture exports combine through the production merger`(provider: String)
         throws

@@ -30,6 +30,40 @@ struct UsageLedgerCodexTests {
         #expect(!json.contains("secret conversation title"))
     }
 
+    @Test(arguments: [-60.0, 0.0, 60.0])
+    func `malformed cached native rows quarantine only identities inside the reporting window`(
+        offset: TimeInterval) throws
+    {
+        // Existing native databases can retain rows that a fresh JSONL parse would reject.
+        let row = CostUsageScanner.CodexUsageRow(
+            day: Self.day,
+            model: "gpt-5",
+            turnID: "turn-one",
+            eventIndex: 1,
+            timestampUnixMs: Int64(Self.now.addingTimeInterval(offset).timeIntervalSince1970 * 1000),
+            input: 0,
+            cached: 70656,
+            output: 169,
+            responseID: "response-one")
+        let ledger = Self.project(rows: [row])
+        let id = UsageLedgerRecord.digest(["codex", "request", "synthetic-session", "response-one"])
+        let clean = Self.project(rows: [Self.row(response: "response-one")])
+        let isInWindow = offset <= 0
+        try ledger.validate(provider: "codex", historyDays: 1)
+        #expect(ledger.records.isEmpty)
+        #expect(ledger.conflictingRecordIDs == (isInWindow ? [id] : nil))
+        #expect(ledger.incompleteRequestCount == (isInWindow ? 1 : 0))
+        #expect(!ledger.coverageIsEstablished)
+        #expect(ledger.warnings.contains { $0.contains("Invalid native token counts") } == isInWindow)
+        let combined = try UsageLedgerMerger.merge(
+            reports: [.init(host: "local", ledger: ledger), .init(host: "remote", ledger: clean)],
+            provider: "codex",
+            historyDays: 1)
+        #expect(combined.combined.totalTokens == (isInWindow ? 0 : 110))
+        #expect(combined.combined.conflictCount == (isInWindow ? 1 : 0))
+        #expect(!combined.combined.coverageIsEstablished)
+    }
+
     @Test
     func `legacy identity retains event provenance and warns about weak evidence`() {
         let first = Self.project(rows: [Self.row()])
@@ -208,8 +242,8 @@ struct UsageLedgerCodexTests {
                 options: fixture.options,
                 pricingCacheRoot: fixture.options.cacheRoot)
             let id = UsageLedgerRecord.digest(["codex", "request", "synthetic-session", "response-one"])
-            if field == "private_model", !sameFile {
-                // Native dedup selects by file metadata; an unknown-route winner is excluded.
+            if field == "private_model" || field == "zero", !sameFile {
+                // Native dedup selects by file metadata; unknown-route or zero winners can omit representatives.
                 // Either representative outcome must quarantine the clean remote request below.
                 #expect(ledger.records.count <= 1)
             } else {

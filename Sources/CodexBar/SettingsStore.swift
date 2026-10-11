@@ -610,6 +610,8 @@ extension SettingsStore {
             copilotSeatCreditEntitlementRaw: userDefaults.object(
                 forKey: "copilotSeatCreditEntitlement") as? String ?? "",
             costUsageEnabled: costUsageEnabled,
+            crossHostUsageHost: (try? Self.normalizedCrossHostUsageHost(
+                userDefaults.string(forKey: "crossHostUsageHost") ?? "")) ?? "",
             codexLocalSessionCostLedgerEnabled: userDefaults.object(
                 forKey: "codexLocalSessionCostLedgerEnabled") as? Bool ?? false,
             costReportingPeriod: costReportingPeriod,

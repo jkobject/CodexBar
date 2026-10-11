@@ -51,23 +51,41 @@ observation from another host cannot revive a native conflict, including when it
 
 The Codex installed-pricing regression uses a separate synthetic models.dev catalog with a $2/million
 uncached input rate: 100,000 input tokens cost $0.20. It checks unchanged catalog bytes and that no cost
-database is created in the pricing root. The scan database remains disposable.
+database is created in the pricing root. Codex ledger collection now keeps a separate persistent private
+cache for native scan cursors and numeric/hash identity evidence. It does not write combined results into
+ordinary account-scoped cost databases. Completed files and appended histories can reuse that cache;
+rewrites, removals and interrupted or incompatible cache state require recovery. A process lock and
+owner-only permissions protect its local files. An unfinished native JSONL line may remain in a local
+resume cursor, but it never enters the numeric export or SSH transport.
 
 The stable upgrade regression uses the actual v0.74.0/main parser fingerprint `f406dae284de4a55`. It removes
 the source log before adopting the compatible database, verifies saved billing/pricing rows, retained
 reports and checkpoints, asserts zero destructive rebuilds, then resumes the persisted cursor.
 
-## Native UI trial
+## Saved-host integration and native UI evidence
 
-Private live trials of the packaged CLI and the native manual panel exercised both providers against the
-selected SSH host. The panel was checked for disabled controls during collection, cancellation restoration,
-clearing previous results on provider reselection, partial coverage and expanded source diagnostics.
-Private results remain outside this PR; the public screenshot shows the empty controls only.
+The application now saves one explicitly added SSH host in **Usage & Spend**. Enabled Codex and Claude
+Code providers include that host during ordinary cost refreshes. The normal menu, spend dashboard and
+top-level provider widgets use the deduplicated union rather than adding a remote total to a local total.
+Account-specific widgets and ordinary cost caches retain their account scope. Collection covers at most
+365 days, and shorter display periods project the same accepted identity union. Missing sources, excluded
+identities and unknown prices remain explicit limitations or recorded subtotals.
 
-Debug `--usage-ledger-preview` enters the real panel in a standalone window before ordinary settings,
-provider startup or shared dashboard cache access. The full application still integrates that same panel
-in Usage & Spend. The initial trial used the regular dashboard before this safer preview was added;
-there is no pre-trial cache snapshot, so preservation of that initial local cache cannot be claimed.
+The integration regressions cover ordinary refresh publication, a joined refresh captured by the spend
+dashboard, widget totals, retirement of a pending old-host result, cancellation, and source failures.
+These checks exercise the store and presentation inputs; they do not establish the rendered behavior of
+the final packaged application. Fresh packaged-CLI fixture captures and a final native saved-host UI
+trial are separate release checks, and are not claimed as completed by this document.
+
+Earlier private live trials of the packaged CLI and the previous manual panel exercised both providers
+against the selected SSH host, including cancellation, partial coverage and source diagnostics. Those
+trials predate the saved-host interface and do not validate its final layout or automatic interactions.
+Private results remain outside this PR; the earlier public screenshot shows empty controls only.
+
+Debug `--usage-ledger-preview` remains a standalone presentation aid before ordinary app startup. It
+does not initialize settings, providers or shared dashboard caches and does not exercise saved-host
+automatic collection. The initial trial used the regular dashboard before this isolated preview was
+added; there is no pre-trial cache snapshot, so preservation of that initial shared cache cannot be claimed.
 
 This evidence demonstrates the bounded native-history operation. It does not establish exhaustive
 account-wide usage, an invoiced dollar amount, or maintainer approval of the proposed product contract.

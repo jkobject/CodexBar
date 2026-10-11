@@ -4096,6 +4096,7 @@ enum CostUsageScanner {
         inheritedTotalsResolver: ((String, String) throws -> CodexForkBaseline)? = nil,
         checkCancellation: CancellationCheck? = nil) throws -> CodexParseResult
     {
+        codexLedgerRequestObserver?.beginFile(fileURL, startOffset: startOffset)
         var currentModel = initialModel
         var previousTotals = initialTotals
         var sessionId = initialForkAccountingState?.metadata.sessionId ?? initialSessionID
@@ -4248,6 +4249,8 @@ enum CostUsageScanner {
                     ? Self.codexModelEvidence(currentModel) : nil)
                 ?? CostUsagePricing.codexUnattributedModel
             Self.codexLedgerRequestObserver?.observe(
+                fileURL: fileURL,
+                endOffset: endOffset,
                 sessionID: sessionId,
                 row: CodexUsageRow(
                     day: day,

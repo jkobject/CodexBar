@@ -14,23 +14,29 @@ codexbar cost --provider claude --combine-remote build-host
 codexbar cost --provider claude --ledger-only --format json --days 30
 ```
 
-The native app exposes the same manual operation in **Usage & Spend → Cross-host usage — Experimental**.
-Choose Codex or Claude Code, enter a trusted SSH alias and select **Fetch report**. Changing the provider,
-host or reporting timezone clears the result. Cancellation and leaving the view cancel the operation;
-a late completion cannot publish over a newer request. Reports are retained only in memory. There is no
-periodic SSH discovery or collection, and the existing local dashboard totals are unchanged.
+In **Usage & Spend → Cross-host usage — Experimental**, enter a trusted SSH alias and select **Add host**
+once. The saved host participates in ordinary cost refreshes for enabled Codex and Claude Code providers.
+Adding a host enables cost history collection; it does not enable a disabled provider. **Remove host**
+restores local accounting. The menu and spend dashboard use the same deduplicated identity union, so
+the dashboard does not add the local total a second time. The configured timezone defines both sources'
+calendar buckets. Collection reads the last 365 days; shorter menu and chart periods project that union.
+The All range remains bounded to those collected days.
+
+Changing or removing the host, timezone or cost configuration retires pending work before cancellation.
+A late SSH completion cannot publish into the new scope. Local and remote readers start concurrently,
+and source failures retain usable records with explicit partial coverage. Combined reports are retained
+in memory and kept separate from account-scoped cost caches. The SSH alias is saved in user defaults.
 
 Debug builds accept `--usage-ledger-preview` or `CODEXBAR_USAGE_LEDGER_PREVIEW=1` to open the real panel
 in a standalone trial window before normal app startup. This preview uses the current calendar and
 does not initialize settings, provider refreshes, or the ordinary dashboard's shared caches.
 
-![Manual experimental panel before collecting any private usage](screenshots/usage-ledger-preview.jpg)
-
 The remote machine must have this experimental CLI installed as `codexbar` on its login-shell PATH.
 The macOS app-bundle helper is a fallback when no PATH executable exists. Finding an older executable
 that lacks `--ledger-only` is a source failure; it does not trigger another scan or a fallback total.
 SSH runs with batch authentication, strict known-host checking, no terminal, no forwarded agent and no
-port forwarding. A failed source remains visible while the other source's recorded subtotal is retained.
+port forwarding. It requests compression for the numeric reply. A failed source remains visible while
+the other source's recorded subtotal is retained.
 
 ## Reporting window
 
@@ -74,17 +80,22 @@ machines; they are pseudonymous identifiers, not a claim of anonymization.
 
 Validation rejects unsupported schemas/providers, mismatched windows, invalid numeric values, overflow
 and malformed identity hashes. Each ledger is bounded to 100,000 records and 32 MiB of encoded output.
-The SSH operation has a 180-second timeout. Codex scanning uses a disposable local cache removed after
-the scan. The feature writes no persistent report cache or configuration, and never copies raw histories
-to the collecting machine.
+The SSH operation has a 180-second timeout. Codex scanning uses a separate private incremental native
+cache on each machine. It stores numeric/hash identity evidence alongside the native scanner's local
+resume cursors, uses owner-only permissions and a cross-process lock, and recovers after an interrupted
+write. Native cursors can contain an unfinished local JSONL line; this local data is never part of the
+ledger or transferred over SSH. The first scan must read available history; later scans reuse completed
+files and append cursors. Rewrites, removals and incompatible or dirty cache state trigger recovery.
 
 ## Conservative accounting
 
 Stable request identities are unioned before summing. Equal identities with equal native usage count
 once. Different token, model or reasoning observations under the same identity are conflicts: the
 conflicting identity is excluded and the result is partial. Different price/provenance observations
-retain unique token accounting but make the combined dollar amount unavailable. Unknown prices do the
-same; a partial known-price sum is not presented as the total price.
+retain unique token accounting but make the complete combined dollar amount unavailable. Unknown prices
+do the same. `pricedCostUSD` separately exposes the accepted known-price subtotal, which the app labels
+as a subtotal with explicit unpriced request counts. An entirely unknown-priced window stays unavailable;
+only a proven empty window can display zero.
 
 Native exporters detect disagreements before selecting same-host copies. Codex observes owned request
 records before replay suppression; Claude compares completed, already-normalized per-file responses.
@@ -110,15 +121,18 @@ use that reader's API-price estimate, including cache/priority metadata. Prices 
 machines with different catalogs or custom overlays. These amounts do not establish subscription spend
 or the provider's invoiced charge.
 
-The disposable Codex scan database is separate from its pricing input: exports read the installed
-models.dev catalog through the native resolver without copying, refreshing or modifying it. Existing
+The incremental Codex scan database is separate from its pricing input: exports read the installed
+models.dev catalog through the native resolver without copying, refreshing or modifying it. Missing
+remote estimates can be filled from the collector's installed catalog using exact Claude model IDs and
+supported native pricing modes. Existing priced values retain their provenance. Unknown models remain
+unpriced. Codex Fast estimates apply documented API multipliers, including GPT-6 model families. Existing
 stable cost databases adopt the exact compatible v0.74.0/main parser fingerprint while retaining saved
 reports, billing rows, pricing and checkpoints.
 
 ## Experiment and review scope
 
-This is an opt-in design proposal, not an automatic replacement for local spend accounting. Validation
+This is an opt-in design proposal: saving an SSH host explicitly selects combined local/remote accounting. Validation
 must cover copied/resumed histories, forks and unavailable fork parents, streaming response updates,
 request versus legacy representations, contradictory token or price observations, missing metadata,
 millisecond window roundtrips, source failures, privacy and cancellation. CLI/parser tests establish
-accounting behavior; a separate rendered-app check establishes the manual native interaction.
+accounting behavior; a separate rendered-app check establishes saved-host configuration and automatic native interaction.

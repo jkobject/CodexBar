@@ -1564,6 +1564,7 @@ extension StatusItemController {
     }
 
     func tokenSnapshotForCostHistorySubmenu(provider: UsageProvider) -> CostUsageTokenSnapshot? {
+        if self.store.usesCrossHostUsage(provider) { return self.store.tokenSnapshot(for: provider) }
         let projected = self.store.tokenSnapshot(
             fromProviderSnapshot: self.store.snapshot(for: provider.instanceID),
             provider: provider)

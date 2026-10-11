@@ -15,6 +15,7 @@ private struct CodexCostCatchUpContext {
 
 extension UsageStore {
     func startCodexCostCatchUpIfNeeded(afterRefreshing provider: UsageProvider) {
+        // Provider-specific by design: Codex alone owns resumable account catch-up, which the combined ledger replaces.
         guard provider == .codex else { return }
         if self.codexCostCatchUpStopRequested || self.codexCostCatchUpActivity?.requiresExplicitResume == true {
             guard ProviderInteractionContext.current == .userInitiated,
@@ -24,6 +25,10 @@ extension UsageStore {
     }
 
     func startCodexCostCatchUpIfNeeded(mode: CodexCostCatchUpMode = .automatic) {
+        if self.usesCrossHostUsage(.codex) {
+            self.cancelCodexCostCatchUp()
+            return
+        }
         let scope = self.tokenCostScope(for: .codex)
         let scopeSignature = self.tokenSnapshotScopeSignature(for: .codex)
         if self.codexCostCatchUpTask != nil,

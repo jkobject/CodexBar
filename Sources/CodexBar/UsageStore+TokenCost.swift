@@ -212,7 +212,10 @@ extension UsageStore {
     }
 
     func tokenSnapshot(for provider: UsageProvider) -> CostUsageTokenSnapshot? {
-        self.accountScopedTokenSnapshot(for: provider)
+        if self.usesCrossHostUsage(provider) {
+            return self.crossHostUsageMenuSnapshot(for: provider)
+        }
+        return self.accountScopedTokenSnapshot(for: provider)
     }
 
     func tokenSnapshotForCurrentProviderConfig(
@@ -366,7 +369,8 @@ extension UsageStore {
     }
 
     func tokenError(for provider: UsageProvider) -> String? {
-        self.tokenErrors[provider.instanceID]
+        if self.usesCrossHostUsage(provider) { return self.crossHostUsageErrors[provider] }
+        return self.tokenErrors[provider.instanceID]
     }
 
     func tokenLastAttemptAt(for provider: UsageProvider) -> Date? {
@@ -462,6 +466,7 @@ extension UsageStore {
     }
 
     func tokenCostRefreshIsActive(for provider: UsageProvider) -> Bool {
+        if self.usesCrossHostUsage(provider) { return self.crossHostUsageRefreshing.contains(provider) }
         if self.tokenRefreshInFlight.contains(provider.instanceID) {
             return true
         }
@@ -896,7 +901,8 @@ extension UsageStore {
     }
 
     func tokenCostIsAccountAgnostic(for provider: UsageProvider) -> Bool {
+        if self.usesCrossHostUsage(provider) { return true }
         // Provider-specific by design: only Codex's explicit ambient scope spans local accounts.
-        provider == .codex && self.tokenCostScope(for: provider).signature == "codex:ambient"
+        return provider == .codex && self.tokenCostScope(for: provider).signature == "codex:ambient"
     }
 }

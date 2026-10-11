@@ -1,25 +1,22 @@
 import Foundation
 
 extension UsageLedgerLoader {
-    /// Explicit exports scan native Codex rollouts with cancellation and a disposable cache.
+    /// Explicit exports reuse a private native cursor cache and preserve cancellation and conflict evidence.
     public static func loadCodex(
         historyDays: Int,
         now: Date = Date(),
         calendar: Calendar = .current) async throws -> UsageLedger
     {
         let now = Self.canonicalDate(now)
-        let cacheRoot = FileManager.default.temporaryDirectory
-            .appendingPathComponent("codexbar-ledger-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: cacheRoot, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: cacheRoot) }
+        var options = CostUsageScanner.Options(
+            calendar: calendar,
+            maxCodexSessionFileBytes: 0,
+            maxCodexScanBytesPerRefresh: 0)
+        options.cacheRoot = CodexLedgerCache.defaultRoot(options: options)
         return try await self.loadCodex(
             historyDays: historyDays,
             now: now,
-            options: CostUsageScanner.Options(
-                cacheRoot: cacheRoot,
-                calendar: calendar,
-                maxCodexSessionFileBytes: 0,
-                maxCodexScanBytesPerRefresh: 0))
+            options: options)
     }
 
     static func loadCodex(
@@ -35,9 +32,21 @@ extension UsageLedgerLoader {
         return try await CostUsageScanExecutor.run { checkCancellation in
             var options = options
             options.refreshMinIntervalSeconds = 0
+            let cacheRoot = options.cacheRoot ?? CodexLedgerCache.defaultRoot(options: options)
+            options.cacheRoot = cacheRoot
+            let privateCache = try CodexLedgerCache(root: cacheRoot, checkCancellation: checkCancellation)
+            defer { privateCache.release() }
+            let roots = CostUsageScanner.codexSessionsRoots(options: options)
+            var inventory = try CodexLedgerCache.inventory(roots: roots, checkCancellation: checkCancellation)
+            let previous = try privateCache.prepare(inventory: &inventory, checkCancellation: checkCancellation)
+            options.forceRescan = options.forceRescan || previous == nil
             let since = CostReportingPeriod.rolling(days: historyDays)
                 .bounds(now: now, calendar: options.calendar).lowerBound
-            let observations = CodexLedgerRequestObserver(since: since, until: now)
+            let observations = CodexLedgerRequestObserver(
+                since: since,
+                until: now,
+                evidence: options.forceRescan ? [:] : previous?.evidence ?? [:])
+            try privateCache.beginScan()
             // Provider-specific by design: This adapter reads owned native Codex rollouts before replay suppression.
             _ = try CostUsageScanner.$codexLedgerRequestObserver.withValue(observations) {
                 try CostUsageScanner.loadDailyReportCancellable(
@@ -49,25 +58,30 @@ extension UsageLedgerLoader {
                     checkCancellation: checkCancellation)
             }
             try checkCancellation()
-            let roots = CostUsageScanner.codexSessionsRoots(options: options)
             let view = CostUsageStoreAccess.readView(
                 cacheRoot: options.cacheRoot,
                 calendar: options.calendar,
                 purpose: .report).scoped(to: roots)
-            // The disposable scan database must not replace the installed, read-only pricing catalog.
+            // The private scan database must not replace the installed, read-only pricing catalog.
             var ledger = view.codexUsageLedger(
                 range: .init(since: since, until: now, calendar: options.calendar),
                 historyDays: historyDays,
                 now: now,
                 cacheRoot: pricingCacheRoot,
                 rootsFingerprint: CostUsageScanner.codexRootsFingerprint(options: options))
-            let conflicts = observations.conflictingRecordIDs
+            let conflicts = Array(Set((ledger.conflictingRecordIDs ?? []) + observations.conflictingRecordIDs)).sorted()
             if !conflicts.isEmpty {
                 ledger.conflictingRecordIDs = conflicts
                 ledger.coverageIsEstablished = false
                 ledger.warnings
                     .append("Conflicting native Codex request observations were withheld from combined usage.")
             }
+            try checkCancellation()
+            // Commit the pre-scan inventory: a concurrent append remains visible at the next refresh.
+            try privateCache.commit(
+                inventory: inventory,
+                evidence: observations.evidence,
+                checkCancellation: checkCancellation)
             return ledger
         }
     }
@@ -91,6 +105,10 @@ extension UsageLedgerLoader {
         var coverage = source.coverageIsEstablished
         var missingTimestamp = false
         var redactedModel = false
+        var invalidRecordIDs = Set<String>()
+        let windowStartUnixMs = CostUsageLocalDay.date(fromKey: range.sinceKey, calendar: range.calendar)
+            .map { Int64($0.timeIntervalSince1970 * 1000) } ?? 0
+        let windowEndUnixMs = Int64(now.timeIntervalSince1970 * 1000)
         for (path, usage) in cache.files.sorted(by: { $0.key < $1.key }) {
             guard usage.hasCurrentCodexParser else {
                 coverage = false
@@ -100,10 +118,9 @@ extension UsageLedgerLoader {
                 guard row.day >= range.sinceKey, row.day <= range.untilKey,
                       OpenCodexRouteDispatcher.countsTowardCodexSubscription(modelName: row.model)
                 else { continue }
-                let total = row.input.addingReportingOverflow(row.output)
-                guard !total.overflow, row.input >= 0, row.cached >= 0, row.output >= 0 else {
-                    coverage = false
-                    warnings.append("Invalid native token counts were excluded.")
+                if let timestamp = row.timestampUnixMs,
+                   !(windowStartUnixMs...windowEndUnixMs).contains(timestamp)
+                {
                     continue
                 }
                 let identity: UsageLedgerIdentity
@@ -127,6 +144,13 @@ extension UsageLedgerLoader {
                         row.timestampUnixMs.map(String.init) ?? "",
                     ]
                 }
+                let id = UsageLedgerRecord.digest(components)
+                let total = row.input.addingReportingOverflow(row.output)
+                guard !total.overflow, row.input >= 0, row.cached >= 0, row.cached <= row.input, row.output >= 0 else {
+                    coverage = false
+                    invalidRecordIDs.insert(id)
+                    continue
+                }
                 // Missing timestamps retain the native day bucket without inventing request identity.
                 let timestamp = row.timestampUnixMs
                     ?? CostUsageLocalDay.date(fromKey: row.day, calendar: range.calendar)
@@ -149,7 +173,7 @@ extension UsageLedgerLoader {
                 // Provider-specific by design: Codex session digests must not collide with Claude transcript
                 // namespaces.
                 records.append(UsageLedgerRecord(
-                    id: UsageLedgerRecord.digest(components),
+                    id: id,
                     sessionID: usage.sessionId.map { UsageLedgerRecord.digest(["codex", "session", $0]) },
                     identity: identity,
                     timestampUnixMs: timestamp,
@@ -165,6 +189,9 @@ extension UsageLedgerLoader {
                     pricingModel: exportedPricingModel,
                     pricingMode: priority != nil || row.pricingMode == "priority" ? "priority" : "standard"))
             }
+        }
+        if !invalidRecordIDs.isEmpty {
+            warnings.append("Invalid native token counts were excluded and their identities were withheld.")
         }
         if records.contains(where: { $0.identity == .legacyEvent }) {
             warnings.append("Legacy Codex events lack provider request IDs; matching relies on rollout provenance.")
@@ -208,11 +235,13 @@ extension UsageLedgerLoader {
             bucketTimeZone: range.calendar.timeZone.identifier,
             coverageIsEstablished: coverage,
             records: records,
-            incompleteRequestCount: unresolved,
+            incompleteRequestCount: CheckedSum.integers([unresolved, invalidRecordIDs.count]) ?? Int.max,
             warnings: Array(Set(warnings)).sorted())
-        ledger.windowStartUnixMs = CostUsageLocalDay.date(fromKey: range.sinceKey, calendar: range.calendar)
-            .map { Int64($0.timeIntervalSince1970 * 1000) } ?? 0
-        ledger.windowEndUnixMs = Int64(now.timeIntervalSince1970 * 1000)
+        if !invalidRecordIDs.isEmpty {
+            ledger.conflictingRecordIDs = invalidRecordIDs.sorted()
+        }
+        ledger.windowStartUnixMs = windowStartUnixMs
+        ledger.windowEndUnixMs = windowEndUnixMs
         return ledger
     }
 

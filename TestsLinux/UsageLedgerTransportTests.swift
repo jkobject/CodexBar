@@ -12,6 +12,7 @@ struct UsageLedgerTransportTests {
             host: "BuildUser@fixture-host", provider: "codex", historyDays: 1,
             now: Self.now, calendar: Self.calendar)
         #expect(expectedArguments == [
+            "-C",
             "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "StrictHostKeyChecking=yes",
             "-o", "RemoteCommand=none", "-o", "RequestTTY=no", "-o", "ForwardAgent=no",
             "-o", "ClearAllForwardings=yes", "-T", "-n", "--", "BuildUser@fixture-host", "sh", "-lc",

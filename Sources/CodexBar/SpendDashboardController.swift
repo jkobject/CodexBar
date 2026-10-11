@@ -233,21 +233,24 @@ enum SpendDashboardSource {
                 force: mode.forcesLoader)
         }
 
-        let providerBaselines = initialProviders.filter { $0 != .codex }.map { provider in
-            let captured = self.capturedTokenPublication(store: store, provider: provider)
-            let shouldRefresh: Bool = if mode == .refreshMissing,
-                                         UsageStore.usesSpendDashboardIndependentTokenSnapshot(provider)
-            {
-                store.spendDashboardTokenRefreshNeeded(for: provider)
-            } else {
-                mode.shouldRefresh(hasPublication: captured.publication != nil)
+        await store.refreshCrossHostUsageForDashboard(providers: initialProviders, mode: mode)
+        // Provider-specific by design: Codex account histories and the combined host ledger bypass provider baselines.
+        let providerBaselines = initialProviders.filter { $0 != .codex && !store.usesCrossHostUsage($0) }
+            .map { provider in
+                let captured = self.capturedTokenPublication(store: store, provider: provider)
+                let shouldRefresh: Bool = if mode == .refreshMissing,
+                                             UsageStore.usesSpendDashboardIndependentTokenSnapshot(provider)
+                {
+                    store.spendDashboardTokenRefreshNeeded(for: provider)
+                } else {
+                    mode.shouldRefresh(hasPublication: captured.publication != nil)
+                }
+                return (
+                    provider: provider,
+                    publicationRevision: captured.revision,
+                    trigger: store.spendDashboardTokenRefreshTrigger(for: provider),
+                    shouldRefresh: shouldRefresh)
             }
-            return (
-                provider: provider,
-                publicationRevision: captured.revision,
-                trigger: store.spendDashboardTokenRefreshTrigger(for: provider),
-                shouldRefresh: shouldRefresh)
-        }
         let baselinesToRefresh = providerBaselines.filter(\.shouldRefresh)
         if !baselinesToRefresh.isEmpty {
             await withTaskGroup(of: Void.self) { group in
@@ -288,8 +291,7 @@ enum SpendDashboardSource {
                 force: mode.forcesLoader)
         }
 
-        // A native projection is disjoint from the inclusive Claude/Codex publication while
-        // Pi owns the same rows, even when the Pi input is hidden from the chart.
+        // Provider-specific by design: Pi ownership removes overlapping Claude/Codex rows, including hidden Pi inputs.
         let piBaseline = providerBaselines.first { $0.provider == .pi }
         let piCurrent = self.capturedTokenPublication(store: store, provider: .pi)
         let piOwnsSource = providers.contains(.pi)
@@ -299,8 +301,17 @@ enum SpendDashboardSource {
         var inputs: [SpendDashboardModel.ProviderInput] = []
         var unavailableSourceIDs: Set<String> = []
         var confirmedEmptySourceIDs: Set<String> = []
-        // Provider-specific by design: spend dashboard
-        for provider in providers where provider != .codex {
+        // Provider-specific by design: Codex enters once as a combined ledger; ordinary Codex inputs remain per
+        // account.
+        for provider in providers where provider != .codex || store.usesCrossHostUsage(provider) {
+            if store.usesCrossHostUsage(provider) {
+                if let input = store.crossHostUsageDashboardInput(for: provider) {
+                    inputs.append(input)
+                } else {
+                    unavailableSourceIDs.insert(provider.rawValue)
+                }
+                continue
+            }
             // Provider-specific by design: Grok local session tokens are independent of the
             // remote billing snapshot, so a failed probe still publishes readable logs.
             if provider == .grok {
@@ -682,6 +693,7 @@ enum SpendDashboardSource {
 
     @MainActor
     static func codexSources(settings: SettingsStore, store: UsageStore) -> [CodexSpendSourceDescriptor] {
+        if store.usesCrossHostUsage(.codex) { return [] }
         let homes = self.codexHomes(settings: settings, store: store)
         let providerName = store.metadata(for: .codex).displayName
         return homes.enumerated().map { index, home in
@@ -713,6 +725,7 @@ enum SpendDashboardSource {
             "\(provider.rawValue):\(settings.providerConfigRevision(for: provider))"
         }
         parts.append("bucket:\(settings.costUsageBucketTimeZoneIdentifier)")
+        parts.append("ssh-host:\(settings.crossHostUsageHost)")
         if providers.contains(.codex) {
             parts.append(contentsOf: self.codexHomes(settings: settings, store: store).map { home in
                 [
@@ -732,7 +745,8 @@ enum SpendDashboardSource {
         store: UsageStore) -> [String]
     {
         var revisions: [String] = []
-        // Provider-specific by design: regular Codex publication is a refresh trigger; account caches remain authority.
+        // Provider-specific by design: Codex revisions track account catch-up and normal refresh beside the host
+        // ledger.
         if providers.contains(.codex) {
             revisions.append("codex-dashboard:\(store.spendDashboardCodexCostCatchUpRevision)")
             revisions.append("codex-current:\(store.tokenSnapshotPublicationRevision(for: .codex))")
@@ -741,6 +755,7 @@ enum SpendDashboardSource {
             revisions.append("opencodex:\(settings.costUsageSettingsRevision)")
         }
         revisions += providers.compactMap { provider in
+            if store.usesCrossHostUsage(provider) { return store.crossHostUsageSourceRevision(for: provider) }
             // Provider-specific by design: Codex inputs come from account caches, not provider-global snapshots.
             guard provider != .codex else { return nil }
             let current: CurrentProviderConfigTokenPublication? =
@@ -854,6 +869,7 @@ enum SpendDashboardSource {
         store: UsageStore) -> [String]
     {
         providers.compactMap { provider in
+            if store.usesCrossHostUsage(provider) { return store.crossHostUsageOwnershipFingerprint(for: provider) }
             // Provider-specific by design: spend dashboard
             guard provider != .codex else { return nil }
             var config = (settings.providerConfig(for: provider) ?? ProviderConfig(id: provider.instanceID))
@@ -974,13 +990,6 @@ enum SpendDashboardSource {
             identity: "\(id)|\(cacheIdentity)",
             displayName: displayName,
             request: request)
-    }
-
-    private static func codexDisplayNamesByID(_ sources: [CodexSpendSourceDescriptor]) -> [String: String] {
-        sources.reduce(into: [:]) { result, source in
-            guard let separator = source.identity.lastIndex(of: "|") else { return }
-            result["codex:\(source.identity[..<separator])"] = source.displayName
-        }
     }
 
     private static func sourceToken(_ source: CodexActiveSource) -> String {

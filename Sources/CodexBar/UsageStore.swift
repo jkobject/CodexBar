@@ -21,6 +21,9 @@ extension UsageStore {
         _ = self.claudeSwapLastError
         _ = self.claudeSwapRevision
         _ = self.tokenSnapshotPublications
+        _ = self.crossHostUsageReports
+        _ = self.crossHostUsageErrors
+        _ = self.crossHostUsageRefreshing
         _ = self.tokenErrors
         _ = self.tokenRefreshInFlight
         _ = self.codexCostCatchUpActivity
@@ -58,6 +61,7 @@ extension UsageStore {
         _ = self.refreshingProviders
         _ = self.statuses
         _ = self.tokenSnapshotPublications
+        _ = self.crossHostUsageReports
         _ = self.spendDashboardTokenPublications
         _ = self.spendDashboardPublication.revision
         _ = self.historicalPaceRevision
@@ -71,6 +75,7 @@ extension UsageStore {
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.observeSettingsChanges()
+                self.synchronizeCrossHostUsageConfiguration()
                 self.providerAvailabilityCache.removeAll(keepingCapacity: true)
                 self.probeLogs = [:]
                 guard self.startupBehavior.automaticallyStartsBackgroundWork else { return }
@@ -170,6 +175,18 @@ final class UsageStore {
     @ObservationIgnored var claudeSwapRefreshTask: Task<Void, Never>?
     @ObservationIgnored var claudeSwapTransientState = ClaudeSwapTransientState()
     var tokenSnapshotPublications: [ProviderInstanceID: TokenSnapshotPublication] = [:]
+    var crossHostUsageScope: CrossHostUsageScope?
+    var crossHostUsageReportStorage: [UsageProvider: CombinedUsageLedgerReport] = [:]
+    var crossHostUsageErrorStorage: [UsageProvider: String] = [:]
+    var crossHostUsageStageStorage: [UsageProvider: [String: String]] = [:]
+    var crossHostUsageSnapshots: [UsageProvider: CostUsageTokenSnapshot] = [:]
+    var crossHostUsageMenuSnapshots: [UsageProvider: CostUsageTokenSnapshot] = [:]
+    var crossHostUsageRefreshTokens: [UsageProvider: UUID] = [:]
+    var crossHostUsagePublicationRevision: UInt64 = 0
+    @ObservationIgnored var crossHostUsageTasks: [UsageProvider: Task<CrossHostUsageLoadResult, Error>] = [:]
+    @ObservationIgnored var crossHostUsageLastFetch: [UsageProvider: Date] = [:]
+    @ObservationIgnored var _test_crossHostUsageCollector: (@Sendable (
+        UsageProvider, String, Int, Calendar, Date) async throws -> CombinedUsageLedgerReport)?
     var tokenSnapshotPublicationRevisions: [ProviderInstanceID: UInt64] = [:]
     var spendDashboardTokenPublications: [ProviderInstanceID: TokenSnapshotPublication] = [:]
     var spendDashboardTokenPublicationRevisions: [ProviderInstanceID: UInt64] = [:]
@@ -970,6 +987,9 @@ final class UsageStore {
     }
 
     deinit {
+        for task in self.crossHostUsageTasks.values {
+            task.cancel()
+        }
         self.timerTask?.cancel()
         self.tokenRefreshSequenceTask?.cancel()
         self.codexCostCatchUpTask?.cancel()
@@ -1467,6 +1487,11 @@ extension UsageStore {
 
         guard self.settings.isCostUsageEffectivelyEnabled(for: provider), self.isEnabled(provider) else {
             self.resetTokenUsageState(for: provider)
+            return
+        }
+
+        if self.usesCrossHostUsage(provider) {
+            await self.refreshCrossHostUsage(for: provider, force: force)
             return
         }
 

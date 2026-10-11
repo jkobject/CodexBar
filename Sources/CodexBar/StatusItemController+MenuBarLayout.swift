@@ -313,7 +313,9 @@ extension StatusItemController {
         now: Date = .init())
         -> MenuBarLayoutCostValues
     {
-        let snapshot = self.store.tokenSnapshotForCurrentProviderConfig(for: provider)?.snapshot
+        let snapshot = self.store.usesCrossHostUsage(provider)
+            ? self.store.crossHostUsageMenuSnapshot(for: provider)
+            : self.store.tokenSnapshotForCurrentProviderConfig(for: provider)?.snapshot
         let sourceCurrencyCode = snapshot?.currencyCode ?? "USD"
         let preferredCurrencyCode = self.settings.preferredCurrencyCode
         let todayAmount = MenuBarLayoutCostResolver.todayCostUSD(snapshot: snapshot, now: now)

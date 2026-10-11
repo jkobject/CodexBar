@@ -956,6 +956,7 @@ extension CostUsageStoreTests {
 extension CostUsageStoreTests {
     @Test(arguments: [
         "f406dae284de4a55", // Actual 0.74.0 and PR-base fingerprint; source-less history must survive the upgrade.
+        "261f688bb0c523be", // Installed fork before incremental ledger observer hooks.
         "379b799bb4b91683", // Current main before on-demand tool inspection.
         "7ce21041b7a36242", // Prior tool inspection build before upstream process cleanup.
         "0d8f9504f8e63d0f", // Current main before on-demand tool inspection.
@@ -1121,6 +1122,7 @@ extension CostUsageStoreTests {
     }
 
     private static let expectedCompatiblePredecessorParserHashes: Set<String> = [
+        "261f688bb0c523be",
         "f406dae284de4a55",
         "379b799bb4b91683",
         "7ce21041b7a36242",

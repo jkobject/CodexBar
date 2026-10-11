@@ -67,7 +67,9 @@ extension UsageStore {
             now: now)
         let supportsTokenCost = codexProjection != nil || descriptor.tokenCost.supportsTokenCost
         let tokenSnapshot: CostUsageTokenSnapshot?
-        if isSettings {
+        if isLive, self.usesCrossHostUsage(provider) {
+            tokenSnapshot = self.tokenSnapshot(for: provider)
+        } else if isSettings {
             tokenSnapshot = isLive && supportsTokenCost ? self.tokenSnapshot(for: provider) : nil
         } else {
             let projected = isLive || snapshot != nil

@@ -283,6 +283,9 @@ extension StatusItemController {
         let inputs = providers.compactMap { provider -> SpendDashboardModel.ProviderInput? in
             // Provider-level snapshots cannot honor account-level source exclusions before publication.
             guard self.settings.spendDashboardHiddenSourceIDs.isEmpty else { return nil }
+            if self.store.usesCrossHostUsage(provider) {
+                return self.store.crossHostUsageDashboardInput(for: provider)
+            }
             guard let snapshot = self.store.tokenSnapshotForCurrentProviderConfig(for: provider)?.snapshot else {
                 return nil
             }

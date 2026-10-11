@@ -1,37 +1,32 @@
 import CodexBarCore
 import SwiftUI
 
-/// A manual, in-memory report kept separate from the account-scoped local spend dashboard.
+/// Configures one saved host and explains the automatically refreshed, deduplicated usage totals.
 @MainActor
 struct CrossHostUsagePanel: View {
     let calendar: Calendar
-    // Provider-specific by design: The manual native-history experiment defaults to Codex rollouts.
-    @State private var provider: UsageProvider = .codex
-    @State private var host = ""
-    @State private var report: CombinedUsageLedgerReport?
+    var host = ""
+    var reports: [UsageProvider: CombinedUsageLedgerReport] = [:]
+    var errors: [UsageProvider: String] = [:]
+    var refreshing: Set<UsageProvider> = []
+    var stages: [UsageProvider: [String: String]] = [:]
+    var onSetHost: (String) throws -> Void = { _ in }
+    @State private var draftHost = ""
     @State private var errorMessage: String?
-    @State private var requestID: UUID?
-    @State private var operation: Task<Void, Never>?
 
     var body: some View {
         SpendDashboardPanel {
             VStack(alignment: .leading, spacing: 12) {
                 Label(L("Cross-host usage — Experimental"), systemImage: "desktopcomputer")
                     .font(.headline)
-                Text(L("Native histories on this Mac and one SSH host. Runs only when requested; "
-                        + "conversation text stays on each machine."))
+                Text(L("Add one SSH host to include its native histories in normal usage refreshes. "
+                        + "Conversation text stays on each machine."))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 self.controls
-                if self.operation != nil {
-                    HStack {
-                        ProgressView().controlSize(.small)
-                        Text(L("Reading usage histories…"))
-                            .font(.caption)
-                        Spacer()
-                        Button(L("Cancel")) { self.cancel() }
-                    }
+                if !self.refreshing.isEmpty {
+                    self.progress
                 }
                 if let errorMessage = self.errorMessage {
                     Text(errorMessage)
@@ -39,38 +34,84 @@ struct CrossHostUsagePanel: View {
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                 }
-                if let report = self.report {
-                    self.results(report)
+                if !self.host.isEmpty {
+                    // Provider-specific by design: Automatic combined history exists for Codex and Claude only.
+                    ForEach([UsageProvider.codex, .claude], id: \.self) { provider in
+                        if let report = self.reports[provider] {
+                            self.results(report)
+                        } else if let error = self.errors[provider] {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(verbatim: ProviderDescriptorRegistry.descriptor(for: provider).metadata
+                                    .displayName)
+                                    .font(.subheadline.weight(.medium))
+                                Text(error).font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
                 }
             }
         }
         .accessibilityIdentifier("cross-host-usage-panel")
-        .onDisappear { self.cancel() }
-        .onChange(of: self.provider) { _, _ in self.reset() }
-        .onChange(of: self.host) { _, _ in self.reset() }
-        .onChange(of: self.calendar.timeZone.identifier) { _, _ in self.reset() }
+        .onChange(of: self.host) { _, _ in
+            self.draftHost = ""
+            self.errorMessage = nil
+        }
     }
 
     private var controls: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            // Provider-specific by design: Only Codex rollouts and Claude transcripts have ledger exporters.
-            Picker(L("Provider"), selection: self.$provider) {
-                Text(verbatim: "Codex").tag(UsageProvider.codex)
-                Text(verbatim: "Claude Code").tag(UsageProvider.claude)
+        VStack(alignment: .leading, spacing: 8) {
+            if self.host.isEmpty {
+                HStack {
+                    TextField(L("SSH host alias"), text: self.$draftHost)
+                        .textFieldStyle(.roundedBorder)
+                        .accessibilityIdentifier("cross-host-usage-host")
+                        .onSubmit { self.saveHost(self.draftHost) }
+                    Button(L("Add host")) { self.saveHost(self.draftHost) }
+                        .fixedSize()
+                        .disabled(self.draftHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .accessibilityIdentifier("cross-host-usage-add")
+                }
+            } else {
+                HStack {
+                    Label(self.host, systemImage: "server.rack")
+                        .textSelection(.enabled)
+                    Spacer()
+                    Button(L("Remove host")) { self.saveHost("") }
+                        .accessibilityIdentifier("cross-host-usage-remove")
+                }
+                Text(L("Included automatically for Codex and Claude Code. Remove the host to return to local usage."))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text(L("SSH history is limited to the last 365 days."))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
-            .frame(width: 260, alignment: .leading)
-            .disabled(self.operation != nil)
-            HStack {
-                TextField(L("SSH host alias"), text: self.$host)
-                    .textFieldStyle(.roundedBorder)
-                    .disabled(self.operation != nil)
-                    .accessibilityIdentifier("cross-host-usage-host")
-                Button(L("Fetch report")) { self.fetch() }
-                    .fixedSize()
-                    .disabled(self.operation != nil || self.host.trimmingCharacters(in: .whitespacesAndNewlines)
-                        .isEmpty)
-                    .accessibilityIdentifier("cross-host-usage-fetch")
+        }
+    }
+
+    private var progress: some View {
+        HStack(alignment: .top) {
+            ProgressView().controlSize(.small)
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(self.refreshing.sorted { $0.rawValue < $1.rawValue }, id: \.self) { provider in
+                    let name = ProviderDescriptorRegistry.descriptor(for: provider).metadata.displayName
+                    let sources = self.stages[provider] ?? [:]
+                    ForEach(sources.keys.sorted(), id: \.self) { source in
+                        let host = source == "local" ? L("This Mac") : source
+                        Text("\(name) · \(host): \(self.stageText(sources[source] ?? "reading"))")
+                    }
+                }
             }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+    }
+
+    private func stageText(_ stage: String) -> String {
+        switch stage {
+        case "finished": L("Read complete")
+        case "unavailable": L("Unavailable")
+        default: L("Reading usage histories…")
         }
     }
 
@@ -78,14 +119,22 @@ struct CrossHostUsagePanel: View {
         let combined = report.combined
         return VStack(alignment: .leading, spacing: 8) {
             Divider()
+            // Provider-specific by design: These are the only two wire provider names accepted by the ledger.
+            Text(verbatim: report.provider == "codex" ? "Codex" : "Claude Code")
+                .font(.subheadline.weight(.medium))
             if report.reports.contains(where: { $0.ledger != nil }) {
+                if let days = report.reports.compactMap(\.ledger).first?.historyDays {
+                    Text(L("Last %d days", days)).font(.caption).foregroundStyle(.secondary)
+                }
                 Text(combined.coverageIsEstablished
-                    ? L("Last 30 days — deduplicated") : L("Last 30 days — recorded subtotal"))
+                    ? L("Deduplicated usage") : L("Recorded subtotal"))
                     .font(.subheadline.weight(.medium))
                 Text(spendDashboardMetricText(
-                    cost: combined.costUSD,
+                    cost: combined.costUSD ?? combined.pricedCostUSD,
                     tokens: combined.totalTokens,
-                    currencyCode: "USD"))
+                    currencyCode: "USD",
+                    costIsLowerBound: combined.costUSD == nil || !combined.coverageIsEstablished,
+                    tokensAreLowerBound: !combined.coverageIsEstablished))
                     .font(.title3.monospacedDigit())
                 Text(L("Recorded cost or API-price estimate — not a billing receipt."))
                     .font(.caption)
@@ -113,6 +162,9 @@ struct CrossHostUsagePanel: View {
                     .foregroundStyle(.secondary)
             }
             if combined.unpricedCount > 0 {
+                Text(L("Cost includes only records with known prices."))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 Text(L("Missing or conflicting prices: %d", combined.unpricedCount))
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -146,41 +198,13 @@ struct CrossHostUsagePanel: View {
         }
     }
 
-    /// Invalidate the generation before cancelling so a late SSH completion cannot publish stale totals.
-    private func cancel() {
-        self.requestID = nil
-        self.operation?.cancel()
-        self.operation = nil
-    }
-
-    private func reset() {
-        self.cancel()
-        self.report = nil
-        self.errorMessage = nil
-    }
-
-    private func fetch() {
-        self.reset()
-        let requestID = UUID()
-        let provider = self.provider
-        let host = self.host.trimmingCharacters(in: .whitespacesAndNewlines)
-        let calendar = self.calendar
-        self.requestID = requestID
-        self.operation = Task {
-            do {
-                let report = try await UsageLedgerCollector.collect(
-                    provider: provider, host: host, historyDays: 30, calendar: calendar)
-                guard !Task.isCancelled, self.requestID == requestID else { return }
-                self.report = report
-            } catch is CancellationError {
-                // Cancelling is an explicit user action; retain no failure message.
-            } catch {
-                guard !Task.isCancelled, self.requestID == requestID else { return }
-                self.errorMessage = error.localizedDescription
-            }
-            guard self.requestID == requestID else { return }
-            self.requestID = nil
-            self.operation = nil
+    private func saveHost(_ value: String) {
+        do {
+            try self.onSetHost(value)
+            self.draftHost = ""
+            self.errorMessage = nil
+        } catch {
+            self.errorMessage = L("Enter a valid SSH host alias, without spaces or command options.")
         }
     }
 }

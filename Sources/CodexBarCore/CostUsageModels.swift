@@ -270,6 +270,9 @@ public struct CostUsageTokenSnapshot: Sendable, Equatable {
         }
         let coversFullHistory = days >= self.historyDays
         let windowMetered = coversFullHistory ? self.meteredCostUSD : nil
+        let explicitPricingCoverage = !entries.isEmpty && entries.allSatisfy {
+            $0.pricedRequestCount != nil && $0.estimatedRequestCount != nil
+        }
         let totalTokens = tokens.isEmpty ? nil : CheckedSum.integers(tokens)
         let totalRequests = requests.isEmpty ? nil : CheckedSum.integers(requests)
         return CostUsageWindowSummary(
@@ -283,7 +286,8 @@ public struct CostUsageTokenSnapshot: Sendable, Equatable {
             provenance: CostProvenance.forWindow(
                 snapshot: self.costProvenance,
                 hasWindowCosts: !costs.isEmpty,
-                includesMetered: windowMetered != nil),
+                includesMetered: windowMetered != nil
+                    || (self.costProvenance == .mixed && explicitPricingCoverage && coverage.counts.priced > 0)),
             meteredCostUSD: windowMetered,
             incompleteRequestCount: CostUsageIncompleteRequests.sum(entries.map(\.incompleteRequestCount)))
     }

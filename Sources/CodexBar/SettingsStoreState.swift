@@ -56,6 +56,7 @@ struct SettingsDefaultsState {
     var copilotIconSecondaryWindowIDRaw: String
     var copilotSeatCreditEntitlementRaw: String
     var costUsageEnabled: Bool
+    var crossHostUsageHost: String
     var codexLocalSessionCostLedgerEnabled: Bool
     var costReportingPeriod: CostReportingPeriod
     var costUsageBucketTimeZoneIdentifier: String

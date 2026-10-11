@@ -42,6 +42,7 @@ extension UsageStore {
     }
 
     func spendDashboardTokenRefreshNeeded(for provider: UsageProvider) -> Bool {
+        if self.usesCrossHostUsage(provider) { return false }
         guard Self.usesSpendDashboardIndependentTokenSnapshot(provider),
               self.settings.isCostUsageEffectivelyEnabled(for: provider), self.isEnabled(provider)
         else { return false }
@@ -68,6 +69,10 @@ extension UsageStore {
     }
 
     func refreshSpendDashboardTokenUsageNow(for provider: UsageProvider, force: Bool) async {
+        if self.usesCrossHostUsage(provider) {
+            await self.refreshCrossHostUsage(for: provider, force: force)
+            return
+        }
         guard Self.usesSpendDashboardIndependentTokenSnapshot(provider) else { return }
         guard self.settings.isCostUsageEffectivelyEnabled(for: provider) else {
             self.clearSpendDashboardTokenSnapshot(for: provider)

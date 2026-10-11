@@ -975,7 +975,9 @@ struct MenuBarLayoutPreview: View {
         }
         let runsOut = pace
             .flatMap { UsagePaceText.weeklyDetail(provider: provider, pace: $0, now: now).rightLabel }
-        let cost = self.store.tokenSnapshotForCurrentProviderConfig(for: provider)?.snapshot
+        let cost = self.store.usesCrossHostUsage(provider)
+            ? self.store.crossHostUsageMenuSnapshot(for: provider)
+            : self.store.tokenSnapshotForCurrentProviderConfig(for: provider)?.snapshot
         let costToday = MenuBarLayoutCostResolver.todayCostUSD(snapshot: cost, now: now)
         let balanceAmounts = MenuBarLayoutBalanceResolver.balanceAmountsUSD(
             provider: provider,

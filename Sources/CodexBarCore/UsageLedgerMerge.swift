@@ -16,6 +16,8 @@ public struct UsageLedgerCombinedTotals: Codable, Sendable {
     public var totalTokens: Int
     /// Unavailable if any accepted record has unknown or conflicting pricing.
     public var costUSD: Double?
+    /// Known priced subtotal; unknown prices remain explicitly excluded.
+    public var pricedCostUSD: Double?
     public var duplicateCount: Int
     public var conflictCount: Int
     public var unidentifiedCount: Int
@@ -53,6 +55,7 @@ extension UsageLedger {
               self.warnings.allSatisfy({ $0.utf8.count <= 512 })
         else { throw UsageLedgerError.invalid("Invalid or unsupported usage ledger.") }
         for row in self.records {
+            // Provider-specific by design: Codex cache reads are a subset of its inclusive input token count.
             guard Self.isDigest(row.id), row.sessionID.map(Self.isDigest) ?? true,
                   (self.windowStartUnixMs...self.windowEndUnixMs).contains(row.timestampUnixMs),
                   Self.isIdentifier(row.model), row.pricingModel.map(Self.isIdentifier) ?? true,
@@ -67,6 +70,7 @@ extension UsageLedger {
                   ].allSatisfy({ $0 >= 0 }),
                   row.reasoningTokens.map({ $0 >= 0 }) ?? true,
                   row.cacheWrite1hTokens <= row.cacheWriteTokens,
+                  provider != "codex" || row.cacheReadTokens <= row.inputTokens,
                   row.costUSD.map({ $0.isFinite && $0 >= 0 }) ?? true,
                   row.identity != .legacyEvent || row.sessionID != nil
             else { throw UsageLedgerError.invalid("Invalid usage ledger record.") }
@@ -104,6 +108,14 @@ public enum UsageLedgerMerger {
     /// Union stable identities before summing. Contradictions and anonymous usage remain withheld.
     public static func merge(
         reports: [UsageLedgerHostReport], provider: String, historyDays: Int) throws -> CombinedUsageLedgerReport
+    {
+        try self.accounting(reports: reports, provider: provider, historyDays: historyDays).report
+    }
+
+    /// Shares the accepted identity union with dashboard projection so totals cannot diverge.
+    static func accounting(
+        reports: [UsageLedgerHostReport], provider: String, historyDays: Int)
+        throws -> (report: CombinedUsageLedgerReport, rows: [UsageLedgerRecord])
     {
         // Provider-specific by design: Only Codex and Claude native exports satisfy this merger token contract.
         guard ["codex", "claude"].contains(provider), (1...365).contains(historyDays) else {
@@ -172,8 +184,15 @@ public enum UsageLedgerMerger {
                 unique[row.id] = existing
             }
         }
-        let rows = unique.values.sorted { $0.id < $1.id }
-        let unpriced = rows.filter { $0.costUSD == nil || priceConflicts.contains($0.id) }.count
+        let rows = unique.values.sorted { $0.id < $1.id }.map { value in
+            var row = value
+            if priceConflicts.contains(row.id) {
+                row.costUSD = nil
+                row.costProvenance = .unknown
+            }
+            return row
+        }
+        let unpriced = rows.filter { $0.costUSD == nil }.count
         let tokens = try UsageLedger.checkedSum(rows.map(\.totalTokens))
         let legacy = rows.filter { $0.identity == .legacyEvent }.count
         let complete = !reports.isEmpty && reports.allSatisfy { $0.ledger != nil && $0.error == nil }
@@ -181,19 +200,25 @@ public enum UsageLedgerMerger {
             && conflicts.isEmpty && unidentified == 0 && legacy == 0
         let cost = unpriced == 0 && (!rows.isEmpty || complete)
             ? rows.reduce(0.0) { $0 + ($1.costUSD ?? 0) } : nil
-        guard cost.map(\.isFinite) ?? true else { throw UsageLedgerError.invalid("Usage cost total overflow.") }
-        return CombinedUsageLedgerReport(
+        let pricedRows = rows.compactMap(\.costUSD)
+        let subtotal = !pricedRows.isEmpty || (rows.isEmpty && complete) ? pricedRows.reduce(0, +) : nil
+        guard cost.map(\.isFinite) ?? true, subtotal.map(\.isFinite) ?? true else {
+            throw UsageLedgerError.invalid("Usage cost total overflow.")
+        }
+        let report = CombinedUsageLedgerReport(
             provider: provider,
             reports: reports,
             combined: .init(
                 totalTokens: tokens,
                 costUSD: cost,
+                pricedCostUSD: subtotal,
                 duplicateCount: duplicates,
                 conflictCount: conflicts.count,
                 unidentifiedCount: unidentified,
                 legacyIdentityCount: legacy,
                 unpricedCount: unpriced,
                 coverageIsEstablished: complete))
+        return (report, rows)
     }
 
     private static func sameUsage(_ lhs: UsageLedgerRecord, _ rhs: UsageLedgerRecord) -> Bool {

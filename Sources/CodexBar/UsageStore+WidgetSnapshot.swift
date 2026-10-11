@@ -212,6 +212,7 @@ extension UsageStore {
             { return entry }
             // Provider-specific by design: Claude uses its owner-aware path; others require this process's publication.
             guard provider != .claude, enabledProviders.contains(provider.instanceID),
+                  !self.usesCrossHostUsage(provider),
                   self.errors[provider.instanceID] != nil,
                   !self.invalidatedQueuedWidgetProviders.contains(provider.instanceID),
                   !self.widgetUsagePreservationBlockedProviders.contains(provider.instanceID),
@@ -242,7 +243,9 @@ extension UsageStore {
             showSingleAccount: self.settings.claudeSwapShowSingleAccount)
         let activeSwapAccount = swapOwnsClaude ? self.claudeSwapAccountSnapshots.first(where: \.isActive) : nil
         let snapshot = swapOwnsClaude ? activeSwapAccount?.snapshot : self.snapshots[provider.instanceID]
-        let tokenSnapshot = self.tokenSnapshotForCurrentProviderConfig(for: provider)?.snapshot
+        let tokenSnapshot = self.usesCrossHostUsage(provider)
+            ? self.crossHostUsageMenuSnapshot(for: provider)
+            : self.tokenSnapshotForCurrentProviderConfig(for: provider)?.snapshot
         let claudeQuotaOwnerKey: String? = if swapOwnsClaude {
             activeSwapAccount.flatMap { account in
                 ClaudeSwapRetainedUsageStore.ownershipFingerprint(for: account)
@@ -270,6 +273,7 @@ extension UsageStore {
             nil
         }
         guard snapshot != nil ||
+            (self.usesCrossHostUsage(provider) && tokenSnapshot != nil) ||
             (provider == .claude && (tokenSnapshot != nil || preservedClaudeUsage != nil))
         else {
             return nil

@@ -81,7 +81,9 @@ extension StatusItemController {
         if menu.items.last?.isSeparatorItem != true {
             menu.addItem(.separator())
         }
-        let scope = NSMenuItem(title: L("This Mac"), action: nil, keyEquivalent: "")
+        let scopeTitle = self.store.usesCrossHostUsage(provider)
+            ? L("This Mac + %@", self.settings.crossHostUsageHost) : L("This Mac")
+        let scope = NSMenuItem(title: scopeTitle, action: nil, keyEquivalent: "")
         scope.isEnabled = false
         scope.representedObject = "sharedCodexCostScope"
         menu.addItem(scope)
